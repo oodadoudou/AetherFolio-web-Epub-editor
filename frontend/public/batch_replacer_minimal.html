@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智能替换报告 - 现代极简版</title>
+    <link rel="stylesheet" href="batch_replacer_minimal_styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- 顶部导航栏 -->
+        <nav class="top-nav">
+            <div class="nav-content">
+                <div class="logo">
+                    <div class="logo-icon"></div>
+                    <span>智能替换报告</span>
+                </div>
+                <div class="nav-actions">
+                    <button class="nav-btn" onclick="showOverview()">概览</button>
+                    <button class="nav-btn active" onclick="showComparisons()">对比详情</button>
+                    <button class="nav-btn export-btn" onclick="exportReport()">导出报告</button>
+                </div>
+            </div>
+        </nav>
+
+        <!-- 文件信息头部 -->
+        <header class="file-header">
+            <div class="file-info">
+                <h1 class="file-title">别有用心的恋爱史 미필적 고의에 의한 연애사_org.epub</h1>
+                <div class="file-meta">
+                    <span class="meta-item">处理时间: 2024-01-15 14:30</span>
+                    <span class="meta-divider">|</span>
+                    <span class="meta-item">文件大小: 2.3MB</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- 统计概览 -->
+        <section class="stats-overview">
+            <div class="stats-grid">
+                <div class="stat-card clickable" data-animate="slide-up" onclick="showRulesModal()">
+                    <div class="stat-icon rules-icon"></div>
+                    <div class="stat-content">
+                        <div class="stat-number">4</div>
+                        <div class="stat-label">替换规则</div>
+                        <div class="stat-progress">
+                            <div class="progress-bar" style="width: 95%"></div>
+                        </div>
+                    </div>
+                    <div class="click-hint">点击查看详情</div>
+                </div>
+                <div class="stat-card" data-animate="slide-up" style="animation-delay: 0.1s">
+                    <div class="stat-icon instances-icon"></div>
+                    <div class="stat-content">
+                        <div class="stat-number">25</div>
+                        <div class="stat-label">替换实例</div>
+                        <div class="stat-progress">
+                            <div class="progress-bar" style="width: 80%"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="stat-card" data-animate="slide-up" style="animation-delay: 0.2s">
+                    <div class="stat-icon success-icon"></div>
+                    <div class="stat-content">
+                        <div class="stat-number">100%</div>
+                        <div class="stat-label">成功率</div>
+                        <div class="stat-progress">
+                            <div class="progress-bar" style="width: 100%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 替换规则模态窗口 -->
+        <div class="modal-overlay" id="rules-modal-overlay" onclick="closeRulesModal()">
+            <div class="modal-content" onclick="event.stopPropagation()">
+                <div class="modal-header">
+                    <h3 class="modal-title">替换规则列表</h3>
+                    <button class="modal-close" onclick="closeRulesModal()">
+                        <span class="close-icon">×</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <div class="rules-list-modal" id="rules-list-modal">
+                        <div class="rule-item-modal" onclick="jumpToRuleAndClose(0)">
+                            <div class="rule-summary-modal">
+                                <div class="rule-text-modal">
+                                    <span class="rule-from">大哥</span>
+                                    <span class="rule-arrow">→</span>
+                                    <span class="rule-to">哥</span>
+                                </div>
+                                <span class="rule-count-modal">19次</span>
+                            </div>
+                        </div>
+                        <div class="rule-item-modal" onclick="jumpToRuleAndClose(1)">
+                            <div class="rule-summary-modal">
+                                <div class="rule-text-modal">
+                                    <span class="rule-from">自渎</span>
+                                    <span class="rule-arrow">→</span>
+                                    <span class="rule-to">自慰</span>
+                                </div>
+                                <span class="rule-count-modal">4次</span>
+                            </div>
+                        </div>
+                        <div class="rule-item-modal" onclick="jumpToRuleAndClose(2)">
+                            <div class="rule-summary-modal">
+                                <div class="rule-text-modal">
+                                    <span class="rule-from">您一定能养好</span>
+                                    <span class="rule-arrow">→</span>
+                                    <span class="rule-to">他一定能养好</span>
+                                </div>
+                                <span class="rule-count-modal">1次</span>
+                            </div>
+                        </div>
+                        <div class="rule-item-modal" onclick="jumpToRuleAndClose(3)">
+                            <div class="rule-summary-modal">
+                                <div class="rule-text-modal">
+                                    <span class="rule-from">突然就干架了</span>
+                                    <span class="rule-arrow">→</span>
+                                    <span class="rule-to">突然就吵架了</span>
+                                </div>
+                                <span class="rule-count-modal">1次</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 主要内容区域 -->
+        <main class="main-content">
+            <!-- 规则组列表 -->
+            <div class="rules-container" id="rules-container">
+                <!-- 规则组1: 大哥 → 哥 -->
+                <div class="rule-group" data-rule-id="0">
+                    <div class="rule-header" onclick="toggleRuleGroup(0)">
+                        <div class="rule-info">
+                            <div class="rule-badge">19次</div>
+                            <div class="rule-title">
+                                <span class="rule-from">大哥</span>
+                                <div class="rule-arrow">
+                                    <div class="arrow-line"></div>
+                                    <div class="arrow-head"></div>
+                                </div>
+                                <span class="rule-to">哥</span>
+                            </div>
+                        </div>
+                        <div class="rule-toggle">
+                            <div class="toggle-icon" id="toggle-0"></div>
+                        </div>
+                    </div>
+                    <div class="rule-content" id="content-0">
+                        <div class="instances-grid">
+                            <!-- 实例对比卡片 -->
+                            <div class="instance-card" data-animate="fade-in">
+                                <div class="instance-header">
+                                    <span class="instance-number">#1</span>
+                                    <span class="instance-context">对话场景</span>
+                                </div>
+                                <div class="comparison-container">
+                                    <div class="text-section original">
+                                        <div class="section-label">原文</div>
+                                        <div class="text-content">
+                                            「要是有这种疯子存在，我管他叫一辈子<mark class="highlight-original">大哥</mark>!人总得有点盼头吧，您这说的什么话。真是的!」
+                                        </div>
+                                    </div>
+                                    <div class="comparison-divider"></div>
+                                    <div class="text-section modified">
+                                        <div class="section-label">修改后</div>
+                                        <div class="text-content">
+                                            「要是有这种疯子存在，我管他叫一辈子<mark class="highlight-modified">哥</mark>!人总得有点盼头吧，您这说的什么话。真是的!」
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="instance-card" data-animate="fade-in">
+                                <div class="instance-header">
+                                    <span class="instance-number">#2</span>
+                                    <span class="instance-context">内心独白</span>
+                                </div>
+                                <div class="comparison-container">
+                                    <div class="text-section original">
+                                        <div class="section-label">原文</div>
+                                        <div class="text-content">
+                                            「就当是<mark class="highlight-original">大哥</mark>说的话吧。很古板的那种<mark class="highlight-original">大哥</mark>。」
+                                        </div>
+                                    </div>
+                                    <div class="comparison-divider"></div>
+                                    <div class="text-section modified">
+                                        <div class="section-label">修改后</div>
+                                        <div class="text-content">
+                                            「就当是<mark class="highlight-modified">哥</mark>说的话吧。很古板的那种<mark class="highlight-modified">哥</mark>。」
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="instance-card" data-animate="fade-in">
+                                <div class="instance-header">
+                                    <span class="instance-number">#3</span>
+                                    <span class="instance-context">询问对话</span>
+                                </div>
+                                <div class="comparison-container">
+                                    <div class="text-section original">
+                                        <div class="section-label">原文</div>
+                                        <div class="text-content">
+                                            「对了，没什么要跟<mark class="highlight-original">大哥</mark>商量的?」
+                                        </div>
+                                    </div>
+                                    <div class="comparison-divider"></div>
+                                    <div class="text-section modified">
+                                        <div class="section-label">修改后</div>
+                                        <div class="text-content">
+                                            「对了，没什么要跟<mark class="highlight-modified">哥</mark>商量的?」
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 规则组2: 自渎 → 自慰 -->
+                <div class="rule-group" data-rule-id="1">
+                    <div class="rule-header" onclick="toggleRuleGroup(1)">
+                        <div class="rule-info">
+                            <div class="rule-badge">4次</div>
+                            <div class="rule-title">
+                                <span class="rule-from">自渎</span>
+                                <div class="rule-arrow">
+                                    <div class="arrow-line"></div>
+                                    <div class="arrow-head"></div>
+                                </div>
+                                <span class="rule-to">自慰</span>
+                            </div>
+                        </div>
+                        <div class="rule-toggle">
+                            <div class="toggle-icon" id="toggle-1"></div>
+                        </div>
+                    </div>
+                    <div class="rule-content" id="content-1">
+                        <div class="instances-grid">
+                            <div class="instance-card" data-animate="fade-in">
+                                <div class="instance-header">
+                                    <span class="instance-number">#1</span>
+                                    <span class="instance-context">内心独白</span>
+                                </div>
+                                <div class="comparison-container">
+                                    <div class="text-section original">
+                                        <div class="section-label">原文</div>
+                                        <div class="text-content">
+                                            包含<mark class="highlight-original">自渎</mark>的文本内容...
+                                        </div>
+                                    </div>
+                                    <div class="comparison-divider"></div>
+                                    <div class="text-section modified">
+                                        <div class="section-label">修改后</div>
+                                        <div class="text-content">
+                                            包含<mark class="highlight-modified">自慰</mark>的文本内容...
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 规则组3: 您一定能养好 → 他一定能养好 -->
+                <div class="rule-group" data-rule-id="2">
+                    <div class="rule-header" onclick="toggleRuleGroup(2)">
+                        <div class="rule-info">
+                            <div class="rule-badge">1次</div>
+                            <div class="rule-title">
+                                <span class="rule-from">您一定能养好</span>
+                                <div class="rule-arrow">
+                                    <div class="arrow-line"></div>
+                                    <div class="arrow-head"></div>
+                                </div>
+                                <span class="rule-to">他一定能养好</span>
+                            </div>
+                        </div>
+                        <div class="rule-toggle">
+                            <div class="toggle-icon" id="toggle-2"></div>
+                        </div>
+                    </div>
+                    <div class="rule-content" id="content-2">
+                        <div class="instances-grid">
+                            <div class="instance-card" data-animate="fade-in">
+                                <div class="instance-header">
+                                    <span class="instance-number">#1</span>
+                                    <span class="instance-context">对话场景</span>
+                                </div>
+                                <div class="comparison-container">
+                                    <div class="text-section original">
+                                        <div class="section-label">原文</div>
+                                        <div class="text-content">
+                                            「<mark class="highlight-original">您一定能养好</mark>的，不用担心。」
+                                        </div>
+                                    </div>
+                                    <div class="comparison-divider"></div>
+                                    <div class="text-section modified">
+                                        <div class="section-label">修改后</div>
+                                        <div class="text-content">
+                                            「<mark class="highlight-modified">他一定能养好</mark>的，不用担心。」
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 规则组4: 突然就干架了 → 突然就吵架了 -->
+                <div class="rule-group" data-rule-id="3">
+                    <div class="rule-header" onclick="toggleRuleGroup(3)">
+                        <div class="rule-info">
+                            <div class="rule-badge">1次</div>
+                            <div class="rule-title">
+                                <span class="rule-from">突然就干架了</span>
+                                <div class="rule-arrow">
+                                    <div class="arrow-line"></div>
+                                    <div class="arrow-head"></div>
+                                </div>
+                                <span class="rule-to">突然就吵架了</span>
+                            </div>
+                        </div>
+                        <div class="rule-toggle">
+                            <div class="toggle-icon" id="toggle-3"></div>
+                        </div>
+                    </div>
+                    <div class="rule-content" id="content-3">
+                        <div class="instances-grid">
+                            <div class="instance-card" data-animate="fade-in">
+                                <div class="instance-header">
+                                    <span class="instance-number">#1</span>
+                                    <span class="instance-context">情节描述</span>
+                                </div>
+                                <div class="comparison-container">
+                                    <div class="text-section original">
+                                        <div class="section-label">原文</div>
+                                        <div class="text-content">
+                                            两人在餐厅里<mark class="highlight-original">突然就干架了</mark>，引起了其他客人的注意。
+                                        </div>
+                                    </div>
+                                    <div class="comparison-divider"></div>
+                                    <div class="text-section modified">
+                                        <div class="section-label">修改后</div>
+                                        <div class="text-content">
+                                            两人在餐厅里<mark class="highlight-modified">突然就吵架了</mark>，引起了其他客人的注意。
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- 浮动操作按钮 -->
+        <div class="floating-actions">
+            <button class="fab back-to-top" onclick="scrollToTop()" title="回到顶部">
+                <div class="fab-icon up-arrow"></div>
+            </button>
+        </div>
+
+        <!-- 进度指示器 -->
+        <div class="scroll-progress">
+            <div class="progress-line" id="scroll-progress-line"></div>
+        </div>
+    </div>
+
+    <script src="batch_replacer_minimal_scripts.js"></script>
+</body>
+</html>

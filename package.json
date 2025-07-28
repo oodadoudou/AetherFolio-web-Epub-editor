@@ -1,0 +1,31 @@
+{
+  "name": "aetherfolio",
+  "version": "1.0.0",
+  "description": "AetherFolio - Comprehensive Document Processing System",
+  "private": true,
+  "workspaces": [
+    "frontend"
+  ],
+  "scripts": {
+    "check": "cd frontend && npm run lint && npm run build",
+    "dev": "cd frontend && npm run dev",
+    "build": "cd frontend && npm run build",
+    "lint": "cd frontend && npm run lint",
+    "preview": "cd frontend && npm run preview",
+    "install-frontend": "cd frontend && npm install",
+    "backend-dev": "cd backend && python -m uvicorn main:app --reload --host 0.0.0.0 --port 8001",
+    "backend-test": "cd backend && python -m pytest"
+  },
+  "keywords": [
+    "epub",
+    "document-processing",
+    "text-editor",
+    "batch-replace"
+  ],
+  "author": "AetherFolio Team",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  }
+}

@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智能替换报告预览 - AetherFolio</title>
+    <link rel="stylesheet" href="report_styles_green.css">
+</head>
+<body>
+    <!-- Theme Toggle Button -->
+    <button id="theme-toggle" class="theme-toggle">
+        ☀️ Light Mode
+    </button>
+    
+    <div class="container">
+        <div class="header">
+            <h1>🔄 智能替换报告</h1>
+            <div class="subtitle">sample_book.epub</div>
+        </div>
+        
+        <div class="stats">
+            <div class="stat-card clickable" onclick="toggleRulesList()">
+                <span class="stat-number">5</span>
+                <div class="stat-label">替换规则</div>
+                <div class="expand-hint">点击查看详情</div>
+            </div>
+            <div class="stat-card">
+                <span class="stat-number">23</span>
+                <div class="stat-label">替换实例</div>
+            </div>
+        </div>
+        
+        <div class="rules-list-container" id="rules-list">
+            <div class="rules-list-modal">
+                <div class="rules-list-header">
+                    <h3>所有替换规则</h3>
+                    <button class="close-btn" onclick="toggleRulesList()">×</button>
+                </div>
+                <div class="rules-list-content">
+                    <div class="rule-item" onclick="jumpToRule(0)">
+                        <div class="rule-find">"他说"</div>
+                        <div class="rule-arrow">→</div>
+                        <div class="rule-replace">「他说」</div>
+                        <div class="rule-count">8 个实例</div>
+                    </div>
+                    <div class="rule-item" onclick="jumpToRule(1)">
+                        <div class="rule-find">"她回答"</div>
+                        <div class="rule-arrow">→</div>
+                        <div class="rule-replace">「她回答」</div>
+                        <div class="rule-count">5 个实例</div>
+                    </div>
+                    <div class="rule-item" onclick="jumpToRule(2)">
+                        <div class="rule-find">"这是"</div>
+                        <div class="rule-arrow">→</div>
+                        <div class="rule-replace">「这是」</div>
+                        <div class="rule-count">4 个实例</div>
+                    </div>
+                    <div class="rule-item" onclick="jumpToRule(3)">
+                        <div class="rule-find">"那么"</div>
+                        <div class="rule-arrow">→</div>
+                        <div class="rule-replace">「那么」</div>
+                        <div class="rule-count">3 个实例</div>
+                    </div>
+                    <div class="rule-item" onclick="jumpToRule(4)">
+                        <div class="rule-find">"好的"</div>
+                        <div class="rule-arrow">→</div>
+                        <div class="rule-replace">「好的」</div>
+                        <div class="rule-count">3 个实例</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="content">
+            <div class="rule-group" data-group-index="0">
+                <div class="rule-header" onclick="toggleInstances(0)">
+                    <div class="rule-info">
+                        <span class="rule-find">"他说"</span>
+                        <span class="rule-arrow">→</span>
+                        <span class="rule-replace">「他说」</span>
+                    </div>
+                    <div class="rule-stats">
+                        <span class="instance-count">8 个实例</span>
+                        <span class="toggle-icon" id="toggle-0">▼</span>
+                    </div>
+                </div>
+                <div class="instances-container" id="instances-0">
+                    <div class="instance">
+                        <div class="file-info">chapter1.xhtml:45</div>
+                        <div class="context">
+                            <span class="before">主角走向前去，</span>
+                            <span class="highlight">"他说"</span>
+                            <span class="after">道："你好，很高兴见到你。"</span>
+                        </div>
+                    </div>
+                    <div class="instance">
+                        <div class="file-info">chapter2.xhtml:23</div>
+                        <div class="context">
+                            <span class="before">老师看着学生，</span>
+                            <span class="highlight">"他说"</span>
+                            <span class="after">："今天我们学习新的内容。"</span>
+                        </div>
+                    </div>
+                    <div class="instance">
+                        <div class="file-info">chapter3.xhtml:67</div>
+                        <div class="context">
+                            <span class="before">医生检查完毕后，</span>
+                            <span class="highlight">"他说"</span>
+                            <span class="after">："一切都很正常。"</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="rule-group" data-group-index="1">
+                <div class="rule-header" onclick="toggleInstances(1)">
+                    <div class="rule-info">
+                        <span class="rule-find">"她回答"</span>
+                        <span class="rule-arrow">→</span>
+                        <span class="rule-replace">「她回答」</span>
+                    </div>
+                    <div class="rule-stats">
+                        <span class="instance-count">5 个实例</span>
+                        <span class="toggle-icon" id="toggle-1">▼</span>
+                    </div>
+                </div>
+                <div class="instances-container" id="instances-1">
+                    <div class="instance">
+                        <div class="file-info">chapter1.xhtml:78</div>
+                        <div class="context">
+                            <span class="before">女主角思考片刻，</span>
+                            <span class="highlight">"她回答"</span>
+                            <span class="after">道："我同意你的观点。"</span>
+                        </div>
+                    </div>
+                    <div class="instance">
+                        <div class="file-info">chapter4.xhtml:12</div>
+                        <div class="context">
+                            <span class="before">护士听到询问后，</span>
+                            <span class="highlight">"她回答"</span>
+                            <span class="after">："请稍等一下。"</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="rule-group" data-group-index="2">
+                <div class="rule-header" onclick="toggleInstances(2)">
+                    <div class="rule-info">
+                        <span class="rule-find">"这是"</span>
+                        <span class="rule-arrow">→</span>
+                        <span class="rule-replace">「这是」</span>
+                    </div>
+                    <div class="rule-stats">
+                        <span class="instance-count">4 个实例</span>
+                        <span class="toggle-icon" id="toggle-2">▼</span>
+                    </div>
+                </div>
+                <div class="instances-container" id="instances-2">
+                    <div class="instance">
+                        <div class="file-info">chapter2.xhtml:89</div>
+                        <div class="context">
+                            <span class="before">导游指着建筑物，</span>
+                            <span class="highlight">"这是"</span>
+                            <span class="after">我们城市最古老的建筑。"</span>
+                        </div>
+                    </div>
+                    <div class="instance">
+                        <div class="file-info">chapter5.xhtml:34</div>
+                        <div class="context">
+                            <span class="before">厨师介绍菜品：</span>
+                            <span class="highlight">"这是"</span>
+                            <span class="after">我们的招牌菜。"</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="footer">
+            报告生成时间: 2024-01-15 14:30:25
+        </div>
+    </div>
+
+    <!-- 返回顶部按钮 -->
+    <button id="back-to-top" class="back-to-top" title="返回顶部">
+        ↑
+    </button>
+
+    <script src="report_scripts_green.js"></script>
+</body>
+</html>
