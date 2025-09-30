@@ -6,9 +6,9 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 from datetime import datetime
 
-from backend.services.base import BaseService
-from backend.models.schemas import BatchReplaceReport, ReplaceResult
-from backend.core.config import settings
+from services.base import BaseService
+from db.models.schemas import BatchReplaceReport, ReplaceResult
+from core.config import settings
 
 
 class ReportService(BaseService):

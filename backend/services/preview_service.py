@@ -9,11 +9,11 @@ from bs4 import BeautifulSoup
 from jinja2 import Template
 from fastapi import HTTPException
 
-from backend.services.base import CacheableService
-from backend.services.epub_service import epub_service
-from backend.models.schemas import FileType, ResponseStatus, ErrorCode
-from backend.core.config import settings
-from backend.core.security import security_validator
+from services.base import CacheableService
+from services.epub_service import epub_service
+from db.models.schemas import FileType, ResponseStatus, ErrorCode
+from core.config import settings
+from core.security import security_validator
 
 
 class PreviewService(CacheableService[str]):
@@ -223,41 +223,49 @@ class PreviewService(CacheableService[str]):
         
         Args:
             session_id: 会话ID
-            file_path: 文件路径
+            file_path: 文件路径（可以是完整路径或文件名）
             base_url: 基础URL（用于处理相对路径）
             
         Returns:
             str: 预览HTML内容
         """
         # 生成缓存键
-        cache_key = self._get_cache_key(session_id, file_path, base_url)
+        cache_key = f"{session_id}:{file_path}"
         
-        # 尝试从缓存获取
-        cached_html = self.get_from_cache(cache_key)
-        if cached_html:
-            return cached_html
+        # 检查缓存
+        cached_result = self._cache.get(cache_key)
+        if cached_result:
+            return cached_result
         
         async with self.performance_context("generate_preview", session_id=session_id, file_path=file_path):
             try:
+                # 尝试解析文件路径 - 如果是简单文件名，需要查找完整路径
+                resolved_file_path = await self._resolve_file_path(session_id, file_path)
+                
                 # 获取文件内容
-                file_content = await epub_service.get_file_content(session_id, file_path)
+                file_content = await epub_service.get_file_content(session_id, resolved_file_path)
                 
                 # 根据文件类型生成预览
-                if file_content.type == FileType.HTML:
+                file_extension = Path(file_content.path).suffix.lower()
+                mime_type = file_content.mime_type.lower() if file_content.mime_type else ""
+                
+                if (mime_type.startswith('text/html') or 
+                    file_extension in ['.html', '.xhtml', '.htm']):
                     preview_html = await self._generate_html_preview(
                         file_content, session_id, base_url
                     )
-                elif file_content.type == FileType.XML:
+                elif (mime_type.startswith('text/xml') or mime_type.startswith('application/xml') or
+                      file_extension in ['.xml', '.opf', '.ncx']):
                     preview_html = await self._generate_xml_preview(file_content)
-                elif file_content.type == FileType.CSS:
+                elif (mime_type.startswith('text/css') or file_extension == '.css'):
                     preview_html = await self._generate_css_preview(file_content)
-                elif file_content.type == FileType.TEXT:
+                elif (mime_type.startswith('text/') or file_extension in ['.txt', '.md']):
                     preview_html = await self._generate_text_preview(file_content)
                 else:
                     preview_html = await self._generate_default_preview(file_content)
                 
                 # 缓存结果
-                self.set_cache(cache_key, preview_html)
+                self._cache[cache_key] = preview_html
                 
                 return preview_html
                 
@@ -277,6 +285,45 @@ class PreviewService(CacheableService[str]):
                 )
                 
                 return error_html
+    
+    async def _resolve_file_path(self, session_id: str, file_path: str) -> str:
+        """解析文件路径，如果是简单文件名则查找完整路径"""
+        try:
+            # 如果已经是完整路径（包含目录分隔符），直接返回
+            if '/' in file_path or '\\' in file_path:
+                return file_path
+            
+            # 如果是简单文件名，需要在EPUB结构中查找
+            from services.session_service import session_service
+            session = await session_service.get_session(session_id)
+            
+            if not session:
+                raise ValueError(f"Session not found: {session_id}")
+            
+            # 获取会话目录
+            session_dir = session.get('extracted_path')
+            if not session_dir:
+                raise ValueError(f"No extracted path found for session: {session_id}")
+            
+            # 在EPUB目录中递归查找文件
+            import os
+            epub_dir = os.path.join(session_dir, "epub")
+            
+            for root, dirs, files in os.walk(epub_dir):
+                if file_path in files:
+                    # 返回相对于epub目录的路径
+                    full_path = os.path.join(root, file_path)
+                    relative_path = os.path.relpath(full_path, epub_dir)
+                    # 统一使用正斜杠
+                    return relative_path.replace('\\', '/')
+            
+            # 如果找不到文件，返回原始路径（让后续处理报错）
+            self.log_warning(f"File not found in EPUB structure: {file_path}")
+            return file_path
+            
+        except Exception as e:
+            self.log_error(f"Failed to resolve file path: {file_path}", e)
+            return file_path
     
     async def _generate_html_preview(
         self,
@@ -481,6 +528,10 @@ class PreviewService(CacheableService[str]):
                 current_dir = os.path.dirname(current_file_path)
                 css_path = os.path.join(current_dir, css_path).replace('\\', '/')
             
+            # 移除开头的斜杠，确保路径格式正确
+            if css_path.startswith('/'):
+                css_path = css_path[1:]
+            
             # 获取CSS文件内容
             css_content = await epub_service.get_file_content(session_id, css_path)
             return css_content.content
@@ -504,14 +555,25 @@ class PreviewService(CacheableService[str]):
                     else:
                         img_path = src
                     
-                    # 如果有base_url，构建完整URL
-                    if base_url:
-                        img['src'] = urljoin(base_url, img_path)
-                    else:
-                        # 添加占位符或错误提示
-                        img['src'] = f"data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjEwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZGRkIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPuWbvueJh+aXoOazleWKoOi9vToge2ltZ19wYXRofTwvdGV4dD48L3N2Zz4="
-                        img['alt'] = f"图片无法加载: {img_path}"
-                        img['title'] = f"原始路径: {src}"
+                    # 移除开头的斜杠，确保路径格式正确
+                    if img_path.startswith('/'):
+                        img_path = img_path[1:]
+                    
+                    # 构建二进制文件API URL
+                    binary_url = f"/api/v1/files/binary?session_id={session_id}&file_path={img_path}"
+                    img['src'] = binary_url
+                    
+                    # 添加加载错误处理属性
+                    img['data-original-src'] = src
+                    img['data-img-path'] = img_path
+                    img['loading'] = 'lazy'
+                    
+                    # 添加CSS类用于样式控制
+                    existing_class = img.get('class', [])
+                    if isinstance(existing_class, str):
+                        existing_class = existing_class.split()
+                    existing_class.append('epub-image')
+                    img['class'] = ' '.join(existing_class)
             
             return str(soup)
             

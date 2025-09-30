@@ -8,17 +8,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from bs4 import BeautifulSoup
 
-from backend.services.base import AsyncTaskService
-from backend.services.epub_service import epub_service
-from backend.services.text_service import text_service
-from backend.services.report_service import report_service
-from backend.services.session_service import session_service
-from backend.models.schemas import (
+from services.base import AsyncTaskService
+from services.epub_service import epub_service
+from services.text_service import text_service
+from services.report_service import report_service
+from services.session_service import session_service
+from db.models.schemas import (
     ReplaceRule, ReplaceResult, ReplaceProgress, BatchReplaceReport,
     RuleValidationResult, FileType, ResponseStatus, ErrorCode
 )
-from backend.core.config import settings
-from backend.core.security import security_validator
+from core.config import settings
+from core.security import security_validator
 
 
 @dataclass
@@ -53,17 +53,62 @@ class ReplaceService(AsyncTaskService):
         await super()._cleanup()
     
     async def validate_rules(self, rules_content: str) -> RuleValidationResult:
-        """验证替换规则
+        """验证替换规则的语法和安全性
+        
+        对规则文件内容进行全面验证，包括语法检查、正则表达式验证、
+        危险操作检测（如ReDoS攻击模式）等。
         
         Args:
-            rules_content: 规则文件内容
+            rules_content (str): 规则文件内容，支持多种格式：
+                - 箭头格式: "old_text -> new_text"
+                - 正则格式: "pattern -> replacement (Mode: Regex)"
+                - 管道格式: "search|replace|is_regex|enabled|description"
             
         Returns:
-            RuleValidationResult: 验证结果
+            RuleValidationResult: 验证结果对象，包含：
+                - is_valid: 是否所有规则都有效
+                - total_rules: 总规则数
+                - valid_rules: 有效规则数
+                - invalid_rules: 无效规则列表及错误信息
+                - warnings: 警告信息列表
+                
+        Example:
+            >>> rules_content = "hello -> world\ntest -> example (Mode: Text)"
+            >>> result = await replace_service.validate_rules(rules_content)
+            >>> if result.is_valid:
+            ...     print(f"所有 {result.total_rules} 条规则都有效")
         """
         async with self.performance_context("validate_rules"):
             try:
+                # 检查空文件
+                if not rules_content.strip():
+                    return RuleValidationResult(
+                        is_valid=False,
+                        total_rules=0,
+                        valid_rules=0,
+                        invalid_rules=[{
+                            "line": 0,
+                            "rule": {},
+                            "error": "规则文件为空，请添加有效的替换规则"
+                        }],
+                        warnings=[]
+                    )
+                
                 rules = await self._parse_rules(rules_content)
+                
+                # 如果解析后没有规则（只有注释或空行），也认为是无效的
+                if len(rules) == 0:
+                    return RuleValidationResult(
+                        is_valid=False,
+                        total_rules=0,
+                        valid_rules=0,
+                        invalid_rules=[{
+                            "line": 0,
+                            "rule": {},
+                            "error": "文件中没有有效的替换规则"
+                        }],
+                        warnings=[]
+                    )
                 
                 # 验证规则
                 valid_rules = []
@@ -164,6 +209,34 @@ class ReplaceService(AsyncTaskService):
         """
         async with self.performance_context("validate_rules_detailed"):
             try:
+                # 检查空文件
+                if not rules_content.strip():
+                    return {
+                        "is_valid": False,
+                        "total_rules": 0,
+                        "total_rules_count": 0,
+                        "valid_rules_count": 0,
+                        "invalid_rules_count": 1,
+                        "warnings_count": 0,
+                        "dangerous_operations_count": 0,
+                        "valid_rules": [],
+                        "invalid_rules": [{
+                            "line": 0,
+                            "rule_text": "",
+                            "parsed_rule": None,
+                            "errors": ["规则文件为空，请添加有效的替换规则"]
+                        }],
+                        "warnings": [],
+                        "dangerous_operations": [],
+                        "rule_preview": [],
+                        "statistics": {"total_lines": 0, "non_empty_lines": 0, "comment_lines": 0, "empty_lines": 0},
+                        "validation_summary": {
+                            "can_proceed": False,
+                            "has_warnings": False,
+                            "recommendation": "规则文件为空，请添加有效的替换规则"
+                        }
+                    }
+                
                 lines = rules_content.strip().split('\n')
                 total_lines = len(lines)
                 
@@ -182,7 +255,17 @@ class ReplaceService(AsyncTaskService):
                     
                     try:
                         # 解析规则
-                        rule = await self._parse_single_rule(line, line_num)
+                        try:
+                            rule = await self._parse_single_rule(line, line_num)
+                        except ValueError as parse_error:
+                            # 规则解析失败，直接添加到无效规则列表
+                            invalid_rules.append({
+                                "line": line_num,
+                                "rule_text": original_line,
+                                "parsed_rule": None,
+                                "errors": [f"规则格式不正确: {str(parse_error)}"]
+                            })
+                            continue
                         
                         # 基本验证
                         validation_errors = []
@@ -276,6 +359,34 @@ class ReplaceService(AsyncTaskService):
                     for danger in dangerous_operations
                 )
                 
+                # 如果没有有效规则（只有注释或空行），认为是无效的
+                if len(valid_rules) == 0 and len(invalid_rules) == 0:
+                    return {
+                        "is_valid": False,
+                        "total_rules": 0,
+                        "total_rules_count": 0,
+                        "valid_rules_count": 0,
+                        "invalid_rules_count": 1,
+                        "warnings_count": len(warnings),
+                        "dangerous_operations_count": len(dangerous_operations),
+                        "valid_rules": [],
+                        "invalid_rules": [{
+                            "line": 0,
+                            "rule_text": "",
+                            "parsed_rule": None,
+                            "errors": ["文件中没有有效的替换规则"]
+                        }],
+                        "warnings": warnings,
+                        "dangerous_operations": dangerous_operations,
+                        "rule_preview": [],
+                        "statistics": stats,
+                        "validation_summary": {
+                            "can_proceed": False,
+                            "has_warnings": len(warnings) > 0,
+                            "recommendation": "文件中没有有效的替换规则，请添加有效的规则"
+                        }
+                    }
+                
                 return {
                     "is_valid": len(invalid_rules) == 0 and not has_critical_dangers,
                     "total_rules": len(valid_rules) + len(invalid_rules),
@@ -364,7 +475,7 @@ class ReplaceService(AsyncTaskService):
                     continue
                 
                 # 尝试解析无替换文本的格式
-                match_no_replacement = re.match(r'^(.*?)\s*->\s*\(Mode:\s*(Text|Regex)\s*\)$', line, re.IGNORECASE)
+                match_no_replacement = re.match(r'^(.*?)\s*(?:->|→)\s*\(Mode:\s*(Text|Regex)\s*\)$', line, re.IGNORECASE)
                 if match_no_replacement:
                     original, mode = match_no_replacement.groups()
                     rule = ReplaceRule(
@@ -378,7 +489,7 @@ class ReplaceService(AsyncTaskService):
                     continue
                 
                 # 尝试解析简单箭头格式：search -> replace | description | regex
-                arrow_match = re.match(r'^(.*?)\s*->\s*(.*?)(?:\s*\|\s*(.*))?$', line)
+                arrow_match = re.match(r'^(.*?)\s*(?:->|→)\s*(.*?)(?:\s*\|\s*(.*))?$', line)
                 if arrow_match:
                     search_text, replace_text, rest = arrow_match.groups()
                     search_text = search_text.strip()
@@ -393,7 +504,7 @@ class ReplaceService(AsyncTaskService):
                         if len(rest_parts) >= 1:
                             description = rest_parts[0].strip()
                         if len(rest_parts) >= 2:
-                            is_regex = rest_parts[1].strip().lower() == 'regex'
+                            is_regex = rest_parts[1].strip().lower() in ['true', 'regex']
                     
                     rule = ReplaceRule(
                         original=search_text,
@@ -447,10 +558,10 @@ class ReplaceService(AsyncTaskService):
         case_sensitive = False
         
         # 处理前缀
-        if line.startswith('REGEX:'):
+        if line.startswith('REGEX:') or line.startswith('regex:'):
             is_regex = True
             line = line[6:].strip()
-        elif line.startswith('CASE:REGEX:'):
+        elif line.startswith('CASE:REGEX:') or line.startswith('CASE:regex:'):
             is_regex = True
             case_sensitive = True
             line = line[11:].strip()
@@ -459,7 +570,7 @@ class ReplaceService(AsyncTaskService):
             line = line[5:].strip()
         
         # 尝试解析参考实现格式
-        match = re.match(r'^(.*?)\s*->\s*(.*?)\s*\(Mode:\s*(Text|Regex)\s*\)$', line, re.IGNORECASE)
+        match = re.match(r'^(.*?)\s*(?:->|→)\s*(.*?)\s*\(Mode:\s*(Text|Regex)\s*\)$', line, re.IGNORECASE)
         if match:
             original, replacement, mode = match.groups()
             return ReplaceRule(
@@ -471,7 +582,7 @@ class ReplaceService(AsyncTaskService):
              )
         
         # 尝试解析无替换文本的格式
-        match_no_replacement = re.match(r'^(.*?)\s*->\s*\(Mode:\s*(Text|Regex)\s*\)$', line, re.IGNORECASE)
+        match_no_replacement = re.match(r'^(.*?)\s*(?:->|→)\s*\(Mode:\s*(Text|Regex)\s*\)$', line, re.IGNORECASE)
         if match_no_replacement:
             original, mode = match_no_replacement.groups()
             return ReplaceRule(
@@ -483,7 +594,7 @@ class ReplaceService(AsyncTaskService):
              )
         
         # 尝试解析简单箭头格式：search -> replace | description | regex
-        arrow_match = re.match(r'^(.*?)\s*->\s*(.*?)(?:\s*\|\s*(.*))?$', line)
+        arrow_match = re.match(r'^(.*?)\s*(?:->|→)\s*(.*?)(?:\s*\|\s*(.*))?$', line)
         if arrow_match:
             search_text, replace_text, rest = arrow_match.groups()
             search_text = search_text.strip()
@@ -497,7 +608,7 @@ class ReplaceService(AsyncTaskService):
                 if len(rest_parts) >= 1:
                     description = rest_parts[0].strip()
                 if len(rest_parts) >= 2:
-                    is_regex = rest_parts[1].strip().lower() == 'regex' or is_regex
+                    is_regex = rest_parts[1].strip().lower() in ['true', 'regex'] or is_regex
             
             return ReplaceRule(
                  original=search_text,
@@ -802,6 +913,47 @@ class ReplaceService(AsyncTaskService):
         
         return f"验证通过！共{valid_count}个有效规则，可以安全执行批量替换"
     
+    async def execute_replace(
+        self,
+        session_id: str,
+        rules_content: str,
+        case_sensitive: bool = True,
+        target_files: Optional[List[str]] = None
+    ) -> Dict:
+        """执行批量替换（API入口方法）
+        
+        Args:
+            session_id: 会话ID
+            rules_content: 规则文件内容
+            case_sensitive: 是否区分大小写
+            target_files: 目标文件列表
+            
+        Returns:
+            Dict: 包含任务ID的响应
+        """
+        # 验证规则
+        validation_result = await self.validate_rules(rules_content)
+        if not validation_result.is_valid:
+            raise ValueError(f"规则验证失败: {validation_result.invalid_rules}")
+        
+        # 解析规则
+        rules = await self._parse_rules(rules_content)
+        
+        # 执行批量替换
+        task_id = await self.execute_batch_replace(
+            session_id=session_id,
+            rules=rules,
+            case_sensitive=case_sensitive,
+            target_files=target_files
+        )
+        
+        return {
+            "task_id": task_id,
+            "session_id": session_id,
+            "status": "started",
+            "message": "批量替换任务已启动"
+        }
+
     async def start_batch_replace(
         self,
         session_id: str,
@@ -810,18 +962,36 @@ class ReplaceService(AsyncTaskService):
         use_regex: bool = False,
         target_files: Optional[List[str]] = None
     ) -> str:
-        """开始批量替换
+        """开始批量替换（从规则文件内容）
+        
+        这是另一个批量替换入口方法，接受规则文件内容字符串而不是ReplaceRule对象列表。
+        会先解析规则内容，然后调用execute_batch_replace执行替换。
         
         Args:
-            session_id: 会话ID
-            rules_content: 规则文件内容
-            case_sensitive: 是否区分大小写
-            use_regex: 是否使用正则表达式
-            target_files: 目标文件列表
+            session_id (str): 会话ID，用于标识要处理的文件会话
+            rules_content (str): 规则文件内容，支持多种格式
+            case_sensitive (bool, optional): 是否区分大小写。默认为False
+            use_regex (bool, optional): 是否强制使用正则表达式模式。默认为False
+            target_files (Optional[List[str]], optional): 目标文件列表，如果为None则处理所有文件
             
         Returns:
-            str: 任务ID
+            str: 任务ID，用于跟踪替换进度和获取结果
+            
+        Raises:
+            ValueError: 当规则内容无效或会话不存在时
+            
+        Example:
+            >>> rules_content = "old_text -> new_text\npattern -> replacement (Mode: Regex)"
+            >>> task_id = await replace_service.start_batch_replace(
+            ...     session_id="session_123",
+            ...     rules_content=rules_content,
+            ...     case_sensitive=True
+            ... )
         """
+        # 延长会话有效期，确保批量替换过程中不会过期
+        # 批量替换可能需要较长时间，延长到2小时
+        await session_service.extend_session(session_id, extend_seconds=7200)
+        
         # 验证规则
         validation_result = await self.validate_rules(rules_content)
         if not validation_result.is_valid:
@@ -872,17 +1042,44 @@ class ReplaceService(AsyncTaskService):
         case_sensitive: bool = True,
         target_files: Optional[List[str]] = None
     ) -> str:
-        """执行批量替换
+        """执行批量替换操作
+        
+        这是批量替换的主要入口方法，用于对EPUB或文本文件执行大规模替换操作。
+        支持正则表达式和普通文本替换，具有进度跟踪和错误处理功能。
         
         Args:
-            session_id: 会话ID
-            rules: 替换规则列表
-            case_sensitive: 是否区分大小写
-            target_files: 目标文件列表（可选）
+            session_id (str): 会话ID，用于标识要处理的文件会话
+            rules (List[ReplaceRule]): 替换规则列表，每个规则包含：
+                - original: 要搜索的原始文本或正则表达式
+                - replacement: 替换文本
+                - is_regex: 是否为正则表达式
+                - enabled: 是否启用该规则
+                - description: 规则描述
+            case_sensitive (bool, optional): 是否区分大小写。默认为True
+            target_files (Optional[List[str]], optional): 目标文件列表，如果为None则处理所有文件
             
         Returns:
-            str: 任务ID
+            str: 任务ID，用于跟踪替换进度和获取结果
+            
+        Raises:
+            ValueError: 当会话不存在或规则列表为空时
+            HTTPException: 当会话已过期或其他HTTP相关错误时
+            
+        Example:
+            >>> rules = [
+            ...     ReplaceRule(original="old_text", replacement="new_text", is_regex=False),
+            ...     ReplaceRule(original="\\d+", replacement="NUMBER", is_regex=True)
+            ... ]
+            >>> task_id = await replace_service.execute_batch_replace(
+            ...     session_id="session_123",
+            ...     rules=rules,
+            ...     case_sensitive=True
+            ... )
         """
+        # 延长会话有效期，确保批量替换过程中不会过期
+        # 批量替换可能需要较长时间，延长到2小时
+        await session_service.extend_session(session_id, extend_seconds=7200)
+        
         import uuid
         task_id = str(uuid.uuid4())
         
@@ -915,11 +1112,7 @@ class ReplaceService(AsyncTaskService):
         # 启动异步任务（不等待完成）
         async def _run_background_task():
             try:
-                await self.run_task(
-                    task_id,
-                    self._execute_batch_replace(task_id, task),
-                    timeout=settings.batch_replace_timeout
-                )
+                await self._execute_batch_replace(task_id, task)
             except Exception as e:
                 self.log_error("Background task failed", e, task_id=task_id)
                 try:
@@ -938,6 +1131,9 @@ class ReplaceService(AsyncTaskService):
         """执行批量替换"""
         try:
             self.log_info("Starting batch replace", task_id=task_id, session_id=task.session_id)
+            
+            # 再次延长会话有效期，确保在执行过程中不会过期
+            await session_service.extend_session(task.session_id, extend_seconds=7200)
             
             # 更新进度状态
             await self._update_progress(task_id, status="running")
@@ -1012,7 +1208,7 @@ class ReplaceService(AsyncTaskService):
                 
                 try:
                     # 创建会话目录
-                    session_dir = Path(settings.session_dir) / task.session_id
+                    session_dir = Path("backend/sessions") / task.session_id
                     session_dir.mkdir(parents=True, exist_ok=True)
                     
                     if file_type == 'text':
@@ -1117,25 +1313,33 @@ class ReplaceService(AsyncTaskService):
     ) -> Optional[ReplaceResult]:
         """处理文本文件"""
         try:
-            # 获取会话目录
-            session_dir = Path(settings.session_dir) / session_id
+            # 从内存中获取TEXT文件内容
+            from services.text_service import text_service
             
-            # 对于TEXT文件，直接使用会话目录下的文件
-            # 假设TEXT文件直接保存在会话目录中
-            full_file_path = session_dir / file_path
+            # 检查text_service中是否有该会话的文件内容
+            if not hasattr(text_service, 'file_contents') or session_id not in text_service.file_contents:
+                self.log_info(f"Session file contents not found in memory: {session_id}")
+                return None
             
-            # 如果文件不存在，尝试查找会话目录中的文本文件
-            if not full_file_path.exists():
-                # 查找会话目录中的文本文件
-                text_files = list(session_dir.glob('*.txt')) + list(session_dir.glob('*.text')) + list(session_dir.glob('*.md'))
-                if text_files:
-                    full_file_path = text_files[0]  # 使用第一个找到的文本文件
-                else:
-                    self.log_info(f"Text file not found, skipping: {file_path}")
-                    return None
+            file_contents = text_service.file_contents[session_id]
+            if file_path not in file_contents:
+                self.log_info(f"Text file not found in memory, skipping: {file_path}")
+                return None
             
-            # 读取文件内容
-            file_content = await text_service.read_text_file(full_file_path)
+            # 从内存中读取文件内容
+            content_bytes = file_contents[file_path]
+            original_content = content_bytes.decode('utf-8')
+            
+            # 创建文件内容对象
+            from models.file_content import FileContent
+            file_content = FileContent(
+                path=file_path,
+                content=original_content,
+                encoding='utf-8',
+                mime_type='text/plain',
+                size=len(content_bytes),
+                is_binary=False
+            )
             
             # 使用文本服务处理文件
             modified_content, replacements = await text_service.process_text_file(
@@ -1143,10 +1347,8 @@ class ReplaceService(AsyncTaskService):
             )
             
             if replacements:
-                # 保存修改后的文件
-                await text_service.write_text_file(
-                    full_file_path, modified_content, file_content.encoding
-                )
+                # 更新内存中的文件内容
+                text_service.file_contents[session_id][file_path] = modified_content.encode('utf-8')
                 
                 # 转换替换记录格式
                 replacement_dicts = []
@@ -1366,11 +1568,11 @@ class ReplaceService(AsyncTaskService):
         # 生成 HTML 报告
         try:
             # 获取源文件名
-            from backend.services.session_service import session_service
+            from services.session_service import session_service
             session = await session_service.get_session(session_id)
             source_filename = "unknown.epub"
-            if session and session.original_filename:
-                source_filename = session.original_filename
+            if session and session.get('original_filename'):
+                source_filename = session['original_filename']
             elif session and session.metadata and session.metadata.get('original_filename'):
                 source_filename = session.metadata.get('original_filename')
             
@@ -1387,13 +1589,27 @@ class ReplaceService(AsyncTaskService):
         return report
     
     async def get_progress(self, task_id: str) -> Optional[ReplaceProgress]:
-        """获取替换进度
+        """获取批量替换任务的实时进度信息
         
         Args:
-            task_id: 任务ID
+            task_id (str): 任务ID，由execute_batch_replace方法返回
             
         Returns:
-            Optional[ReplaceProgress]: 进度信息
+            Optional[ReplaceProgress]: 进度信息对象，包含：
+                - status: 任务状态 ("pending", "running", "completed", "failed")
+                - processed_files: 已处理文件数
+                - total_files: 总文件数
+                - current_file: 当前处理的文件名
+                - progress_percentage: 进度百分比 (0.0-100.0)
+                - start_time: 开始时间
+                - estimated_remaining: 预估剩余时间（秒）
+                如果任务不存在则返回None
+                
+        Example:
+            >>> progress = await replace_service.get_progress("task_123")
+            >>> if progress:
+            ...     print(f"进度: {progress.progress_percentage:.1f}%")
+            ...     print(f"状态: {progress.status}")
         """
         return self.progress_data.get(task_id)
     
@@ -1406,10 +1622,28 @@ class ReplaceService(AsyncTaskService):
         Yields:
             str: SSE格式的进度数据
         """
+        import json
+        
         last_progress = None
         max_wait_time = 300  # 最大等待时间5分钟
         start_time = time.time()
         no_progress_count = 0  # 连续无进度更新计数
+        
+        # 立即发送初始状态消息
+        current_progress = self.progress_data.get(task_id)
+        if current_progress:
+            data = current_progress.model_dump()
+            yield f"data: {json.dumps(data)}\r\n\r\n"
+            last_progress = current_progress
+        else:
+            # 如果任务不存在，发送等待状态
+            initial_data = {
+                "status": "waiting",
+                "message": "Waiting for task to start",
+                "task_id": task_id,
+                "progress": 0.0
+            }
+            yield f"data: {json.dumps(initial_data)}\r\n\r\n"
         
         while True:
             current_progress = self.progress_data.get(task_id)
@@ -1430,9 +1664,8 @@ class ReplaceService(AsyncTaskService):
             
             if current_progress and current_progress != last_progress:
                 # 发送进度更新
-                import json
                 data = current_progress.model_dump()
-                yield f"data: {json.dumps(data)}\n\n"
+                yield f"data: {json.dumps(data)}\r\n\r\n"
                 last_progress = current_progress
                 
                 # 如果任务完成或失败，结束流
@@ -1443,13 +1676,28 @@ class ReplaceService(AsyncTaskService):
             await asyncio.sleep(1)
     
     async def get_report(self, task_id: str) -> Optional[BatchReplaceReport]:
-        """获取替换报告
+        """获取批量替换任务的详细报告
         
         Args:
-            task_id: 任务ID
+            task_id (str): 任务ID，由execute_batch_replace方法返回
             
         Returns:
-            Optional[BatchReplaceReport]: 替换报告
+            Optional[BatchReplaceReport]: 替换报告对象，包含：
+                - task_id: 任务ID
+                - session_id: 会话ID
+                - total_files: 总文件数
+                - processed_files: 已处理文件数
+                - total_replacements: 总替换次数
+                - execution_time: 执行时间（秒）
+                - results: 每个文件的详细替换结果列表
+                - created_at: 报告创建时间
+                如果任务不存在或未完成则返回None
+                
+        Example:
+            >>> report = await replace_service.get_report("task_123")
+            >>> if report:
+            ...     print(f"处理了 {report.processed_files} 个文件")
+            ...     print(f"总共替换 {report.total_replacements} 次")
         """
         return self.replace_reports.get(task_id)
     
@@ -1502,6 +1750,45 @@ class ReplaceService(AsyncTaskService):
             self.session_to_task.pop(session_id_to_remove, None)
         
         self.log_info("Task data cleaned up", task_id=task_id)
+    
+    def get_template_content(self) -> str:
+        """获取规则模板内容
+        
+        Returns:
+            str: 模板文件内容
+        """
+        template_content = """# 批量替换规则模板
+# 格式说明：
+# 1. 基本格式：查找文本 → 替换文本
+# 2. 带描述：查找文本 → 替换文本 | 描述信息
+# 3. 正则表达式：查找文本 → 替换文本 | 描述 | true
+# 4. 分隔符格式：查找文本\t替换文本\t是否正则\t是否启用\t描述
+# 5. 删除文本：查找文本 → (Mode: Text) 或 查找文本 → (Mode: Regex)
+#
+# 注意事项：
+# - 以 # 开头的行为注释，会被忽略
+# - 空行会被忽略
+# - 支持 UTF-8 编码
+# - 正则表达式请谨慎使用，避免性能问题
+
+# 示例替换规则（请根据需要修改）：
+
+# 基本文本替换
+旧文本 → 新文本
+
+# 带描述的替换
+错误拼写 → 正确拼写 | 修正拼写错误
+
+# 正则表达式替换（将连续的空格替换为单个空格）
+\\s+ → " " | 规范化空格 | true
+
+# 删除特定文本
+不需要的文本 → (Mode: Text)
+
+# 分隔符格式示例
+# 查找\t替换\tfalse\ttrue\t描述信息
+"""
+        return template_content
 
 
 # 创建全局服务实例

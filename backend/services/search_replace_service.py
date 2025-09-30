@@ -5,7 +5,7 @@ import re
 import asyncio
 from typing import Dict, Any, List, Optional, Tuple
 from pathlib import Path
-from backend.services.base import BaseService
+from .base import BaseService
 
 
 class SearchReplaceService(BaseService):

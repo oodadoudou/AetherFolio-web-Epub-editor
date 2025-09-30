@@ -1,183 +1,130 @@
-"""应用配置设置"""
+"""应用程序配置模块"""
 
 import os
-from typing import List, Optional
-from pydantic_settings import BaseSettings
-from pydantic import Field
+from pathlib import Path
+from typing import Optional
+try:
+    from pydantic_settings import BaseSettings
+    from pydantic import Field
+except ImportError:
+    from pydantic import BaseSettings, Field
 
 
 class Settings(BaseSettings):
-    """应用配置类"""
+    """应用程序设置"""
     
     # 应用基础配置
-    app_name: str = Field(default="AetherFolio EPUB Editor", description="应用名称")
-    version: str = Field(default="1.0.0", description="应用版本")
-    app_version: str = Field(default="1.0.0", description="应用版本")
-    debug: bool = Field(default=False, description="调试模式")
-    testing: bool = Field(default=False, description="测试模式")
-    host: str = Field(default="0.0.0.0", description="服务器主机")
-    port: int = Field(default=8000, description="服务器端口")
+    app_name: str = "AetherFolio EPUB Editor"
+    app_version: str = "1.0.0"
+    debug: bool = Field(default=False, env="DEBUG")
     
-    # API配置
-    api_v1_prefix: str = Field(default="/api/v1", description="API v1前缀")
-    docs_url: str = Field(default="/docs", description="文档URL")
-    redoc_url: str = Field(default="/redoc", description="ReDoc URL")
-    openapi_url: str = Field(default="/openapi.json", description="OpenAPI规范URL")
+    # 服务器配置
+    host: str = Field(default="0.0.0.0", env="HOST")
+    port: int = Field(default=8000, env="PORT")
+    allowed_origins: list = Field(default=["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000", "http://127.0.0.1:5173"], env="ALLOWED_ORIGINS")  # CORS允许的源
     
-    # CORS配置
-    allowed_origins: List[str] = Field(
-        default=[
-            "http://localhost:3000",
-            "http://127.0.0.1:3000",
-            "http://localhost:5173",
-            "http://localhost:5174",
-            "http://localhost:5175",
-            "http://localhost:5176"
-        ],
-        description="允许的跨域源"
+    # 数据库配置 - 确保路径指向backend/db/data
+    database_url: str = Field(
+        default="sqlite:///./db/data/aetherfolio.db",
+        env="DATABASE_URL"
     )
-    allowed_methods: List[str] = Field(
-        default=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        description="允许的HTTP方法"
+    auth_database_url: str = Field(
+        default="sqlite:///./db/data/auth.db",
+        env="AUTH_DATABASE_URL"
     )
-    allowed_headers: List[str] = Field(
-        default=["*"],
-        description="允许的请求头"
-    )
+    # Session数据库配置已移除 - 现在使用内存存储
     
     # 文件存储配置
-    upload_dir: str = Field(default="uploads", description="上传目录")
-    session_dir: str = Field(default="sessions", description="会话目录")
-    temp_dir: str = Field(default="temp", description="临时目录")
-    reports_dir: str = Field(default="reports", description="报告目录")
+    data_dir: str = Field(default="./data", env="DATA_DIR")
+    backup_dir: str = Field(default="./backups", env="BACKUP_DIR")
     
-    # 文件限制配置
-    max_file_size: int = Field(default=100 * 1024 * 1024, description="最大文件大小（字节）")
-    max_files_per_session: int = Field(default=10, description="每个会话最大文件数")
-    max_rules_file_size: int = Field(default=1024 * 1024, description="最大规则文件大小（字节）")
-    allowed_file_types: List[str] = Field(
-        default=["application/epub+zip"],
-        description="允许的文件MIME类型"
-    )
-    allowed_rule_file_types: List[str] = Field(
-        default=[".txt", ".csv"],
-        description="允许的规则文件类型"
-    )
-    
-    # 会话管理配置
-    session_timeout: int = Field(default=3600, description="会话超时时间（秒）")
-    cleanup_interval: int = Field(default=300, description="清理间隔（秒）")
-    max_sessions: int = Field(default=1000, description="最大会话数")
-    
-    # 数据库配置
-    database_url: str = Field(default="", description="数据库连接URL")
-    
-    # Redis配置
-    redis_url: str = Field(default="redis://localhost:6379/0", description="Redis连接URL")
-    redis_db: int = Field(default=0, description="Redis数据库")
-    redis_password: Optional[str] = Field(default=None, description="Redis密码")
-    
-    # 速率限制配置
-    rate_limit_enabled: bool = Field(default=True, description="是否启用速率限制")
-    rate_limit_requests: int = Field(default=100, description="速率限制请求数")
-    rate_limit_window: int = Field(default=60, description="速率限制时间窗口（秒）")
-    upload_rate_limit: str = Field(default="10/minute", description="上传速率限制")
-    api_rate_limit: str = Field(default="100/minute", description="API速率限制")
-    
-    # 日志配置
-    log_level: str = Field(default="INFO", description="日志级别")
-    log_format: str = Field(default="json", description="日志格式")
-    log_file: Optional[str] = Field(default=None, description="日志文件路径")
-    
-    # 安全配置
-    secret_key: str = Field(default_factory=lambda: __import__('secrets').token_urlsafe(32), description="密钥")
-    access_token_expire_minutes: int = Field(default=30, description="访问令牌过期时间（分钟）")
+    # 文件大小限制
+    max_file_size: int = Field(default=100 * 1024 * 1024, env="MAX_FILE_SIZE")  # 文件大小限制
+    max_epub_file_size: int = Field(default=50 * 1024 * 1024, env="MAX_EPUB_FILE_SIZE")  # 50MB
+    max_text_file_size: int = Field(default=10 * 1024 * 1024, env="MAX_TEXT_FILE_SIZE")   # 10MB
+    max_request_size: int = Field(default=100 * 1024 * 1024, env="MAX_REQUEST_SIZE")  # 100MB
+    epub_max_files: int = Field(default=1000, env="EPUB_MAX_FILES")  # EPUB文件最大包含文件数量
+    preview_max_size: int = Field(default=20 * 1024 * 1024, env="PREVIEW_MAX_SIZE")  # 预览文件最大大小 5MB
     
     # 性能配置
-    worker_processes: int = Field(default=1, description="工作进程数")
-    max_concurrent_tasks: int = Field(default=10, description="最大并发任务数")
-    max_connections: int = Field(default=1000, description="最大连接数")
-    keepalive_timeout: int = Field(default=5, description="保持连接超时时间")
-    slow_request_threshold: float = Field(default=1.0, description="慢请求阈值（秒）")
-    max_request_size: int = Field(default=100 * 1024 * 1024, description="最大请求大小（字节）")
+    worker_processes: int = Field(default=4, env="WORKER_PROCESSES")  # 工作进程数
     
-    # EPUB处理配置
-    epub_extract_timeout: int = Field(default=300, description="EPUB解压超时时间（秒）")
-    epub_validation_enabled: bool = Field(default=True, description="是否启用EPUB验证")
-    epub_max_files: int = Field(default=1000, description="EPUB最大文件数")
-    epub_max_size: int = Field(default=500 * 1024 * 1024, description="EPUB最大大小（字节）")
+    # 安全配置
+    secret_key: str = Field(
+        default="your-secret-key-change-in-production",
+        env="SECRET_KEY"
+    )
+    algorithm: str = Field(default="HS256", env="ALGORITHM")
+    access_token_expire_minutes: int = Field(
+        default=30,
+        env="ACCESS_TOKEN_EXPIRE_MINUTES"
+    )
     
-    # 批量替换配置
-    batch_size: int = Field(default=100, description="批处理大小")
-    max_replacement_rules: int = Field(default=1000, description="最大替换规则数")
-    batch_replace_timeout: int = Field(default=300, description="批量替换超时时间（秒）")
-    batch_replace_max_rules: int = Field(default=1000, description="批量替换最大规则数")
-    batch_replace_chunk_size: int = Field(default=100, description="批量替换块大小")
+
     
-    # 预览配置
-    preview_cache_size: int = Field(default=50, description="预览缓存大小")
-    preview_cache_ttl: int = Field(default=1800, description="预览缓存TTL（秒）")
-    preview_cache_timeout: int = Field(default=300, description="预览缓存超时时间（秒）")
-    preview_max_size: int = Field(default=10 * 1024 * 1024, description="预览最大大小（字节）")
+    # 日志配置
+    log_level: str = Field(default="INFO", env="LOG_LEVEL")
+    log_file: Optional[str] = Field(default=None, env="LOG_FILE")
+    
+    # 性能配置
+    enable_performance_monitoring: bool = Field(
+        default=True,
+        env="ENABLE_PERFORMANCE_MONITORING"
+    )
+    slow_request_threshold: float = Field(
+        default=1.0,
+        env="SLOW_REQUEST_THRESHOLD"
+    )
+    
+    # 缓存配置
+    cache_ttl: int = Field(default=300, env="CACHE_TTL")  # 5分钟
+    preview_cache_timeout: int = Field(default=300, env="PREVIEW_CACHE_TIMEOUT")  # 预览缓存超时
+    
+    # 会话配置
+    session_timeout: int = Field(default=3600, env="SESSION_TIMEOUT")  # 1小时
+    max_sessions: int = Field(default=100, env="MAX_SESSIONS")  # 最大会话数
+    cleanup_interval: int = Field(default=300, env="CLEANUP_INTERVAL")  # 清理间隔，5分钟
     
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
-        case_sensitive = False
-        
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        # 确保目录存在
-        self._ensure_directories()
     
-    def _ensure_directories(self):
+    def get_database_path(self) -> Path:
+        """获取数据库文件路径"""
+        if self.database_url.startswith("sqlite:///"):
+            db_path = self.database_url.replace("sqlite:///", "")
+            if db_path.startswith("./"):
+                return Path(db_path)
+            return Path(db_path)
+        return Path("./db/data/aetherfolio.db")
+    
+    def get_auth_database_path(self) -> Path:
+        """获取认证数据库文件路径"""
+        if self.auth_database_url.startswith("sqlite:///"):
+            db_path = self.auth_database_url.replace("sqlite:///", "")
+            if db_path.startswith("./"):
+                return Path(db_path)
+            return Path(db_path)
+        return Path("./db/data/auth.db")
+    
+    # get_session_database_path方法已移除 - Session现在使用内存存储
+    
+    def ensure_directories(self):
         """确保必要的目录存在"""
         directories = [
-            self.upload_dir,
-            self.session_dir,
-            self.temp_dir,
-            self.reports_dir
+            Path(self.data_dir),
+            Path(self.backup_dir),
+            self.get_database_path().parent,
+            self.get_auth_database_path().parent,
+            # Session数据库路径已移除 - 现在使用内存存储
         ]
         
-        try:
-            for directory in directories:
-                os.makedirs(directory, exist_ok=True)
-        except PermissionError as e:
-            from backend.core.exceptions import ConfigurationError
-            raise ConfigurationError(f"无法创建目录: {str(e)}")
-    
-    def __repr__(self) -> str:
-        """字符串表示，隐藏敏感信息"""
-        return f"Settings(app_name='{self.app_name}', version='{self.version}', debug={self.debug}, host='{self.host}', port={self.port}, max_file_size={self.max_file_size})"
-    
-    def to_dict(self, hide_sensitive: bool = True) -> dict:
-        """导出为字典"""
-        data = self.dict()
-        if hide_sensitive:
-            data['secret_key'] = '[HIDDEN]'
-        return data
-    
-    @property
-    def database_url_computed(self) -> str:
-        """获取计算的数据库URL"""
-        if self.database_url:
-            return self.database_url
-        return f"sqlite:///{self.session_dir}/database.db"
-    
-    @property
-    def is_development(self) -> bool:
-        """是否为开发环境"""
-        return self.debug
-    
-    @property
-    def is_production(self) -> bool:
-        """是否为生产环境"""
-        return not self.debug
+        for directory in directories:
+            directory.mkdir(parents=True, exist_ok=True)
 
 
 # 创建全局设置实例
 settings = Settings()
 
-
-# 导出常用配置
-__all__ = ["settings", "Settings"]
+# 确保目录存在
+settings.ensure_directories()

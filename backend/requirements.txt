@@ -1,18 +1,28 @@
 # Backend dependencies for AetherFolio EPUB Editor
 
 # FastAPI and ASGI server
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
+fastapi==0.108.0
+uvicorn[standard]==0.25.0
 python-multipart==0.0.6
 
 # Data validation and serialization
-pydantic==2.5.0
+pydantic==2.5.3
 pydantic-settings==2.1.0
+
+# Authentication and security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
+python-multipart==0.0.6
+
+# Database
+sqlalchemy==2.0.23
+alembic==1.13.1
 
 # EPUB processing
 ebooklib==0.18
 beautifulsoup4==4.12.2
-lxml==4.9.3
+lxml==5.0.0
 
 # Template engine
 jinja2==3.1.2
@@ -26,7 +36,7 @@ python-magic==0.4.27
 chardet==5.2.0
 
 # Caching and session management
-redis==5.0.1
+redis>=6.2.0
 
 # Rate limiting
 slowapi==0.1.9
@@ -35,39 +45,17 @@ slowapi==0.1.9
 python-json-logger==2.0.7
 
 # Testing dependencies
-pytest==7.4.3
-pytest-asyncio==0.21.1
-httpx==0.25.2
+pytest==7.4.4
+pytest-asyncio==0.23.2
+httpx==0.26.0
 pytest-cov==4.1.0
 factory-boy==3.3.0
 
 # Development dependencies
-black==23.11.0
-isort==5.12.0
-flake8==6.1.0
-mypy==1.7.1
-
-# Web framework
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-
-# EPUB processing
-ebooklib==0.18
-
-# Data validation
-pydantic==2.5.0
-pydantic-settings==2.1.0
-
-# File handling
-aiofiles==23.2.1
-python-multipart==0.0.6
+black==23.12.1
+isort==5.13.2
+flake8==7.0.0
+mypy==1.8.0
 
 # Utilities
 python-dotenv==1.0.0
-
-# Development dependencies (optional)
-# pytest==7.4.3
-# pytest-asyncio==0.21.1
-# black==23.11.0
-# flake8==6.1.0
-# mypy==1.7.1

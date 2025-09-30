@@ -27,9 +27,9 @@ export interface SearchReplaceActions {
   setCurrentResultIndex: (index: number) => void;
   setSearching: (searching: boolean) => void;
   setReplacing: (replacing: boolean) => void;
-  addReplaceRule: (rule: Omit<ReplaceRule, 'id'>) => void;
-  updateReplaceRule: (id: string, updates: Partial<ReplaceRule>) => void;
-  removeReplaceRule: (id: string) => void;
+  addReplaceRule: (rule: ReplaceRule) => void;
+  updateReplaceRule: (index: number, updates: Partial<ReplaceRule>) => void;
+  removeReplaceRule: (index: number) => void;
   clearReplaceRules: () => void;
   setBatchProgress: (progress: { current: number; total: number } | null) => void;
   clearSearch: () => void;
@@ -38,10 +38,10 @@ export interface SearchReplaceActions {
 export type SearchReplaceSlice = SearchReplaceState & SearchReplaceActions;
 
 const defaultSearchOptions: SearchOptions = {
-  caseSensitive: false,
-  wholeWord: false,
+  case_sensitive: false,
+  whole_word: false,
   regex: false,
-  fileTypes: [],
+  file_types: [],
 };
 
 export const createSearchReplaceSlice: StateCreator<SearchReplaceSlice> = (set, get) => ({
@@ -70,24 +70,20 @@ export const createSearchReplaceSlice: StateCreator<SearchReplaceSlice> = (set, 
   setCurrentResultIndex: (index: number) => set({ currentResultIndex: index }),
   setSearching: (searching: boolean) => set({ isSearching: searching }),
   setReplacing: (replacing: boolean) => set({ isReplacing: replacing }),
-  addReplaceRule: (rule: Omit<ReplaceRule, 'id'>) => {
-    const newRule: ReplaceRule = {
-      ...rule,
-      id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
-    };
+  addReplaceRule: (rule: ReplaceRule) => {
     const { replaceRules } = get();
-    set({ replaceRules: [...replaceRules, newRule] });
+    set({ replaceRules: [...replaceRules, rule] });
   },
-  updateReplaceRule: (id: string, updates: Partial<ReplaceRule>) => {
+  updateReplaceRule: (index: number, updates: Partial<ReplaceRule>) => {
     const { replaceRules } = get();
-    const updatedRules = replaceRules.map(rule => 
-      rule.id === id ? { ...rule, ...updates } : rule
+    const updatedRules = replaceRules.map((rule, i) => 
+      i === index ? { ...rule, ...updates } : rule
     );
     set({ replaceRules: updatedRules });
   },
-  removeReplaceRule: (id: string) => {
+  removeReplaceRule: (index: number) => {
     const { replaceRules } = get();
-    set({ replaceRules: replaceRules.filter(rule => rule.id !== id) });
+    set({ replaceRules: replaceRules.filter((_, i) => i !== index) });
   },
   clearReplaceRules: () => set({ replaceRules: [] }),
   setBatchProgress: (progress: { current: number; total: number } | null) => set({ batchProgress: progress }),

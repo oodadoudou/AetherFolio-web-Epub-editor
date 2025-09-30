@@ -1,161 +1,161 @@
-// File API service
-// Handles file upload, export and operations for both EPUB and TEXT files
+// 文件服务
 
-import { apiService, ApiResponse } from './api';
-import { EpubMetadata } from '../store/slices/metadataSlice';
+import { ApiService, apiService } from './api';
+import { 
+  SearchRequest,
+  SearchResponse,
+  ReplaceResponse,
+  ExportResponse,
+  FileInfo
+} from './types/file';
+import { ApiResponse, BookMetadata, FileContentResponse, FileContent } from '../types/api';
+// import { FileNode } from '../types/api'; // 暂时注释掉未使用的导入
+import { SessionInfo } from '../types/api';
 
-export interface UploadResponse {
-  sessionId: string;
-  fileTree: any[];
-  metadata?: EpubMetadata;
-  fileType: 'epub' | 'text';
-}
-
-export interface ExportResponse {
-  downloadUrl: string;
-  filename: string;
-}
-
-export interface TextFileMetadata {
-  filename: string;
-  size: number;
-  encoding?: string;
-  lastModified?: string;
-}
-
-export class FileService {
-  // Upload methods
-  async uploadEpub(file: File): Promise<ApiResponse<UploadResponse>> {
-    console.log('uploadEpub:', file.name);
-    // TODO: Implement EPUB upload
-    throw new Error('Not implemented');
-    // return apiService.upload<UploadResponse>('/upload/epub', file);
-  }
-
-  async uploadText(file: File): Promise<ApiResponse<UploadResponse>> {
-    console.log('uploadText:', file.name);
-    // TODO: Implement TEXT upload
-    throw new Error('Not implemented');
-    // return apiService.upload<UploadResponse>('/upload/text', file);
-  }
-
-  async uploadFile(file: File): Promise<ApiResponse<UploadResponse>> {
-    const fileExtension = file.name.toLowerCase().split('.').pop();
+class FileService {
+  constructor(private apiService: ApiService) {}
+  
+  // 上传方法
+  async uploadEpub(file: File): Promise<SessionInfo> {
+    const formData = new FormData();
+    formData.append('file', file);
     
-    if (fileExtension === 'epub') {
-      return this.uploadEpub(file);
-    } else if (fileExtension === 'txt') {
-      return this.uploadText(file);
-    } else {
-      throw new Error(`Unsupported file type: ${fileExtension}`);
+    const response = await this.apiService.upload<ApiResponse<SessionInfo>>('/upload', formData);
+    return response.data as unknown as SessionInfo;
+  }
+  
+  async uploadText(file: File): Promise<SessionInfo> {
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    const response = await this.apiService.upload<ApiResponse<SessionInfo>>('/upload', formData);
+    return response.data as unknown as SessionInfo;
+  }
+  
+  async uploadFile(file: File): Promise<SessionInfo> {
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    const response = await this.apiService.upload<ApiResponse<SessionInfo>>('/upload', formData);
+    return response.data as unknown as SessionInfo;
+  }
+  
+  // 文件内容操作
+  async getFileContent(
+    sessionId: string, 
+    filePath: string
+  ): Promise<FileContent> {
+    console.log('🔍 fileService: getFileContent called with:', { sessionId, filePath });
+    
+    try {
+      console.log('🔍 fileService: Making API request to /files/content');
+      const response = await this.apiService.get<FileContentResponse>('/files/content', {
+        session_id: sessionId, 
+        file_path: filePath 
+      });
+      
+      console.log('✅ fileService: API response received:', response);
+      
+      return response as unknown as FileContent;
+    } catch (error) {
+      console.error('❌ fileService: getFileContent failed:', error);
+      console.error('❌ fileService: Error details:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+        statusText: error.response?.statusText
+      });
+      throw error;
+    }
+  }
+  
+  async saveFileContent(
+    sessionId: string,
+    filePath: string,
+    content: string,
+    encoding: string = 'utf-8'
+  ): Promise<void> {
+    const response = await this.apiService.post<ApiResponse<void>>('/save-file', {
+      session_id: sessionId,
+      file_path: filePath,
+      content,
+      encoding
+    });
+    return response.data as unknown as void;
+  }
+  
+  // 文件树和信息
+  async getFileTree(sessionId: string): Promise<unknown> {
+    // 后端返回格式: {success, file_tree, total_files, total_size}
+    // 不是标准的ApiResponse格式，所以直接返回原始响应
+    const response = await this.apiService.get(`/file-tree/${sessionId}`);
+    return response;
+  }
+  
+  async getFileInfo(sessionId: string, filePath: string): Promise<FileInfo> {
+    const response = await this.apiService.get<FileInfo>('/files/info', {
+      session_id: sessionId,
+      file_path: filePath
+    });
+    return response as unknown as FileInfo;
+  }
+  
+  // 搜索和替换
+  async searchInFiles(sessionId: string, request: SearchRequest): Promise<SearchResponse> {
+    const response = await this.apiService.post<SearchResponse>('/search', {
+      session_id: sessionId,
+      ...request
+    });
+    return response as unknown as SearchResponse;
+  }
+  
+  async replaceInFile(sessionId: string, filePath: string, search: string, replace: string): Promise<ReplaceResponse> {
+    const response = await this.apiService.post<ReplaceResponse>('/replace', {
+      session_id: sessionId,
+      file_path: filePath,
+      search,
+      replace
+    });
+    return response as unknown as ReplaceResponse;
+  }
+  
+  // 导出功能
+  async exportFile(sessionId: string, format: 'epub' | 'zip' | 'html', metadata?: BookMetadata): Promise<ExportResponse> {
+    const response = await this.apiService.post<ExportResponse>('/export', {
+      session_id: sessionId,
+      format,
+      metadata
+    });
+    return response as unknown as ExportResponse;
+  }
+  
+  // 会话管理
+  async checkSessionStatus(sessionId: string): Promise<{exists: boolean, status: string, message: string}> {
+    try {
+      const response = await this.apiService.get(`/sessions/${sessionId}/status`);
+      return {
+        exists: true,
+        status: 'active',
+        message: '会话存在'
+      };
+    } catch (error: unknown) {
+      const axiosError = error as { response?: { status?: number } };
+      if (axiosError.response?.status === 404) {
+        return {
+          exists: false,
+          status: 'not_found',
+          message: '会话不存在或已过期'
+        };
+      }
+      throw error;
     }
   }
 
-  // Export methods
-  async exportEpub(sessionId: string, metadata: EpubMetadata): Promise<ApiResponse<ExportResponse>> {
-    console.log('exportEpub:', sessionId, metadata);
-    // TODO: Implement EPUB export
-    throw new Error('Not implemented');
-    // return apiService.post<ExportResponse>(`/export/${sessionId}/epub`, metadata);
-  }
-
-  async exportText(sessionId: string): Promise<ApiResponse<ExportResponse>> {
-    console.log('exportText:', sessionId);
-    // TODO: Implement TEXT export
-    throw new Error('Not implemented');
-    // return apiService.post<ExportResponse>(`/export/${sessionId}/text`);
-  }
-
-  // Metadata methods
-  async getEpubMetadata(sessionId: string): Promise<ApiResponse<EpubMetadata>> {
-    console.log('getEpubMetadata:', sessionId);
-    // TODO: Implement EPUB metadata retrieval
-    throw new Error('Not implemented');
-    // return apiService.get<EpubMetadata>(`/files/${sessionId}/metadata`);
-  }
-
-  async updateEpubMetadata(sessionId: string, metadata: Partial<EpubMetadata>): Promise<ApiResponse<void>> {
-    console.log('updateEpubMetadata:', sessionId, metadata);
-    // TODO: Implement EPUB metadata update
-    throw new Error('Not implemented');
-    // return apiService.put<void>(`/files/${sessionId}/metadata`, metadata);
-  }
-
-  async getTextMetadata(sessionId: string): Promise<ApiResponse<TextFileMetadata>> {
-    console.log('getTextMetadata:', sessionId);
-    // TODO: Implement TEXT metadata retrieval
-    throw new Error('Not implemented');
-    // return apiService.get<TextFileMetadata>(`/files/${sessionId}/text-metadata`);
-  }
-
-  // File content methods
-  async getFileContent(sessionId: string, filePath: string): Promise<ApiResponse<{ content: string; language: string }>> {
-    console.log('getFileContent:', sessionId, filePath);
-    // TODO: Implement file content retrieval
-    throw new Error('Not implemented');
-    // return apiService.get<{ content: string; language: string }>(`/files/${sessionId}/content`, { path: filePath });
-  }
-
-  async updateFileContent(sessionId: string, filePath: string, content: string): Promise<ApiResponse<void>> {
-    console.log('updateFileContent:', sessionId, filePath);
-    // TODO: Implement file content update
-    throw new Error('Not implemented');
-    // return apiService.put<void>(`/files/${sessionId}/content`, { path: filePath, content });
-  }
-
-  // Validation methods
-  async validateEpub(sessionId: string): Promise<ApiResponse<{ isValid: boolean; errors: string[] }>> {
-    console.log('validateEpub:', sessionId);
-    // TODO: Implement EPUB validation
-    throw new Error('Not implemented');
-    // return apiService.get<{ isValid: boolean; errors: string[] }>(`/files/${sessionId}/validate`);
-  }
-
-  // Search and replace methods
-  async searchInFiles(sessionId: string, query: string, options: {
-    caseSensitive?: boolean;
-    wholeWord?: boolean;
-    regex?: boolean;
-    scope?: string;
-  }): Promise<ApiResponse<any[]>> {
-    console.log('searchInFiles:', sessionId, query, options);
-    // TODO: Implement search functionality
-    throw new Error('Not implemented');
-    // return apiService.post<any[]>(`/files/${sessionId}/search`, { query, ...options });
-  }
-
-  async replaceInFiles(sessionId: string, searchText: string, replaceText: string, options: {
-    caseSensitive?: boolean;
-    wholeWord?: boolean;
-    regex?: boolean;
-    scope?: string;
-  }): Promise<ApiResponse<any>> {
-    console.log('replaceInFiles:', sessionId, searchText, replaceText, options);
-    // TODO: Implement replace functionality
-    throw new Error('Not implemented');
-    // return apiService.post<any>(`/files/${sessionId}/replace`, { searchText, replaceText, ...options });
-  }
-
-  async batchReplace(sessionId: string, rules: Array<{
-    find: string;
-    replace: string;
-    scope: string;
-  }>): Promise<ApiResponse<any>> {
-    console.log('batchReplace:', sessionId, rules);
-    // TODO: Implement batch replace functionality
-    throw new Error('Not implemented');
-    // return apiService.post<any>(`/files/${sessionId}/batch-replace`, { rules });
+  async deleteSession(sessionId: string): Promise<void> {
+    await this.apiService.delete(`/sessions/${sessionId}`);
   }
 }
 
-// Default file service instance
-export const fileService = new FileService();
-
-// Legacy EPUB service for backward compatibility
-export const epubService = {
-  uploadEpub: (file: File) => fileService.uploadEpub(file),
-  exportEpub: (sessionId: string, metadata: EpubMetadata) => fileService.exportEpub(sessionId, metadata),
-  getMetadata: (sessionId: string) => fileService.getEpubMetadata(sessionId),
-  updateMetadata: (sessionId: string, metadata: Partial<EpubMetadata>) => fileService.updateEpubMetadata(sessionId, metadata),
-  validateEpub: (sessionId: string) => fileService.validateEpub(sessionId),
-};
+// 创建服务实例
+export const fileService = new FileService(apiService);
+export default FileService;

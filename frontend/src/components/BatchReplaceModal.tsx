@@ -34,9 +34,10 @@ interface ReplaceRule {
 interface BatchReplaceModalProps {
   visible: boolean;
   onClose: () => void;
+  isDarkMode?: boolean;
 }
 
-const BatchReplaceModal: React.FC<BatchReplaceModalProps> = ({ visible, onClose }) => {
+const BatchReplaceModal: React.FC<BatchReplaceModalProps> = ({ visible, onClose, isDarkMode = false }) => {
   const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -182,6 +183,23 @@ const BatchReplaceModal: React.FC<BatchReplaceModalProps> = ({ visible, onClose 
     }
   ];
 
+  // Theme styles
+  const modalClassName = isDarkMode ? 'dark-modal' : 'light-modal';
+  const cardStyle = isDarkMode ? {
+    backgroundColor: '#1f1f1f',
+    borderColor: '#333',
+    color: '#e5e5e5'
+  } : {};
+  const alertStyle = isDarkMode ? {
+    backgroundColor: '#2d2d2d',
+    borderColor: '#404040',
+    color: '#e5e5e5'
+  } : {};
+  const tableStyle = isDarkMode ? {
+    backgroundColor: '#1f1f1f',
+    color: '#e5e5e5'
+  } : {};
+
   return (
     <Modal
       title="Batch Replace"
@@ -190,6 +208,7 @@ const BatchReplaceModal: React.FC<BatchReplaceModalProps> = ({ visible, onClose 
       width={800}
       footer={null}
       destroyOnHidden
+      className={modalClassName}
     >
       <div className="space-y-4">
         {currentStep === 'upload' && (
@@ -199,9 +218,10 @@ const BatchReplaceModal: React.FC<BatchReplaceModalProps> = ({ visible, onClose 
               description="The file should contain columns: find, replace, scope"
               type="info"
               showIcon
+              style={alertStyle}
             />
             
-            <Card>
+            <Card style={cardStyle}>
               <Space direction="vertical" className="w-full">
                 <div className="flex justify-between items-center">
                   <Title level={5}>Step 1: Upload Rules File</Title>
@@ -226,7 +246,7 @@ const BatchReplaceModal: React.FC<BatchReplaceModalProps> = ({ visible, onClose 
             </Card>
 
             {rules.length > 0 && (
-              <Card>
+              <Card style={cardStyle}>
                 <Title level={5}>Step 2: Review Rules</Title>
                 <Table 
                   dataSource={rules} 
@@ -234,6 +254,7 @@ const BatchReplaceModal: React.FC<BatchReplaceModalProps> = ({ visible, onClose 
                   pagination={false}
                   size="small"
                   rowKey="id"
+                  style={tableStyle}
                 />
                 <Divider />
                 <div className="text-center">
@@ -252,7 +273,7 @@ const BatchReplaceModal: React.FC<BatchReplaceModalProps> = ({ visible, onClose 
         )}
 
         {currentStep === 'processing' && (
-          <Card>
+          <Card style={cardStyle}>
             <div className="text-center space-y-4">
               <Title level={4}>Processing Replacements...</Title>
               <Progress 
@@ -275,9 +296,10 @@ const BatchReplaceModal: React.FC<BatchReplaceModalProps> = ({ visible, onClose 
               description="All replacement rules have been applied to the selected files."
               type="success"
               showIcon
+              style={alertStyle}
             />
             
-            <Card>
+            <Card style={cardStyle}>
               <Title level={5}>Results Summary</Title>
               <Table 
                 dataSource={rules} 
@@ -285,6 +307,7 @@ const BatchReplaceModal: React.FC<BatchReplaceModalProps> = ({ visible, onClose 
                 pagination={false}
                 size="small"
                 rowKey="id"
+                style={tableStyle}
               />
               <Divider />
               <div className="text-center space-x-2">

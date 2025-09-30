@@ -2,29 +2,48 @@ import React, { useState, useEffect, useRef } from 'react';
 import { X, ChevronDown } from 'lucide-react';
 import useAppStore from '../store/useAppStore';
 
+interface FileNode {
+  name: string;
+  path: string;
+  type: 'file' | 'directory';
+  children?: FileNode[];
+}
+
 interface SelectProps {
   value: string;
   onChange: (value: string) => void;
   options: { value: string; label: string }[];
   className?: string;
+  isDarkMode?: boolean;
 }
 
-const CustomSelect: React.FC<SelectProps> = ({ value, onChange, options, className = '' }) => {
+const CustomSelect: React.FC<SelectProps> = ({ value, onChange, options, className = '', isDarkMode = false }) => {
   const [isOpen, setIsOpen] = useState(false);
   const selectedOption = options.find(opt => opt.value === value);
+  
+  const buttonBg = isDarkMode ? 'bg-gray-700' : 'bg-white';
+  const buttonBorder = isDarkMode ? 'border-gray-600' : 'border-gray-300';
+  const buttonHover = isDarkMode ? 'hover:border-gray-500' : 'hover:border-gray-400';
+  const buttonFocus = isDarkMode ? 'focus:border-blue-400' : 'focus:border-blue-500';
+  const textColor = isDarkMode ? 'text-gray-200' : 'text-gray-900';
+  const iconColor = isDarkMode ? 'text-gray-400' : 'text-gray-500';
+  const dropdownBg = isDarkMode ? 'bg-gray-700' : 'bg-white';
+  const dropdownBorder = isDarkMode ? 'border-gray-600' : 'border-gray-300';
+  const optionHover = isDarkMode ? 'hover:bg-gray-600' : 'hover:bg-gray-100';
+  const optionFocus = isDarkMode ? 'focus:bg-gray-600' : 'focus:bg-gray-100';
   
   return (
     <div className={`relative ${className}`}>
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full px-3 py-1 text-left bg-white border border-gray-300 rounded flex items-center justify-between hover:border-gray-400 focus:outline-none focus:border-blue-500"
+        className={`w-full px-3 py-1 text-left ${buttonBg} border ${buttonBorder} rounded flex items-center justify-between ${buttonHover} focus:outline-none ${buttonFocus} ${textColor}`}
       >
         <span className="text-sm">{selectedOption?.label || value}</span>
-        <ChevronDown className="w-4 h-4 text-gray-500" />
+        <ChevronDown className={`w-4 h-4 ${iconColor}`} />
       </button>
       {isOpen && (
-        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-300 rounded shadow-lg z-50">
+        <div className={`absolute top-full left-0 right-0 mt-1 ${dropdownBg} border ${dropdownBorder} rounded shadow-lg z-50`}>
           {options.map((option) => (
             <button
               key={option.value}
@@ -33,7 +52,7 @@ const CustomSelect: React.FC<SelectProps> = ({ value, onChange, options, classNa
                 onChange(option.value);
                 setIsOpen(false);
               }}
-              className="w-full px-3 py-2 text-left text-sm hover:bg-gray-100 focus:outline-none focus:bg-gray-100"
+              className={`w-full px-3 py-2 text-left text-sm ${optionHover} focus:outline-none ${optionFocus} ${textColor}`}
             >
               {option.label}
             </button>
@@ -49,6 +68,7 @@ interface SearchReplaceModalProps {
   onClose: () => void;
   currentFilePath?: string;
   autoOpen?: boolean;
+  isDarkMode?: boolean;
 }
 
 interface SearchResult {
@@ -64,7 +84,7 @@ interface SearchResult {
 const SearchReplaceModal: React.FC<SearchReplaceModalProps> = ({
   visible,
   onClose,
-  currentFilePath
+  isDarkMode = false
 }) => {
   const { fileTree, currentFile, updateFileContent } = useAppStore();
   
@@ -73,13 +93,14 @@ const SearchReplaceModal: React.FC<SearchReplaceModalProps> = ({
   const [replaceText, setReplaceText] = useState('');
   const [searchMode, setSearchMode] = useState('text');
   const [searchScope, setSearchScope] = useState('current');
+  const [searchDirection, setSearchDirection] = useState('down');
   const [isCaseSensitive, setIsCaseSensitive] = useState(false);
   const [isWrap, setIsWrap] = useState(true);
   
   // Results state
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [currentResultIndex, setCurrentResultIndex] = useState(0);
-  const [isSearching, setIsSearching] = useState(false);
+  const [, setIsSearching] = useState(false);
   
   // Refs
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -98,9 +119,20 @@ const SearchReplaceModal: React.FC<SearchReplaceModalProps> = ({
   
   const scopeOptions = [
     { value: 'current', label: 'Current file' },
-    { value: 'text', label: 'All text files' },
-    { value: 'style', label: 'All style files' },
-    { value: 'txt', label: 'All TEXT files' }
+    { value: 'all', label: 'All files' },
+    { value: 'text', label: 'Text files (HTML/XHTML)' },
+    { value: 'style', label: 'Style files (CSS)' },
+    { value: 'content', label: 'Content files (HTML/XHTML/CSS)' },
+    { value: 'images', label: 'Image files' },
+    { value: 'fonts', label: 'Font files' },
+    { value: 'misc', label: 'Misc files (TXT/XML)' },
+    { value: 'selected', label: 'Selected files' },
+    { value: 'open', label: 'Open files' }
+  ];
+  
+  const directionOptions = [
+    { value: 'down', label: 'Down ↓' },
+    { value: 'up', label: 'Up ↑' }
   ];
   
   // Focus search input when modal opens and clear highlights when closed
@@ -134,28 +166,33 @@ const SearchReplaceModal: React.FC<SearchReplaceModalProps> = ({
   const getFilesInScope = () => {
     const files: { path: string; name: string; content: string }[] = [];
     
-    const traverseTree = (nodes: any[]) => {
+    const traverseTree = (nodes: FileNode[]) => {
       nodes.forEach(node => {
         if (node.type === 'file') {
           const shouldInclude = (() => {
             switch (searchScope) {
               case 'current':
-                return currentFilePath && node.path === currentFilePath;
+                return currentFile && node.path === currentFile.path;
+              case 'all':
+                return true;
               case 'text':
-                return node.path.includes('/Text/') && (node.name.endsWith('.html') || node.name.endsWith('.xhtml'));
+                return node.name.endsWith('.html') || node.name.endsWith('.xhtml');
               case 'style':
-                return node.path.includes('/Styles/') && node.name.endsWith('.css');
-              case 'txt':
-                return node.name.endsWith('.txt');
+                return node.name.endsWith('.css');
+              case 'content':
+                return node.name.endsWith('.html') || node.name.endsWith('.xhtml') || node.name.endsWith('.css');
+              case 'images':
+                return /\.(jpg|jpeg|png|gif|svg|webp|bmp|ico)$/i.test(node.name);
+              case 'fonts':
+                return /\.(ttf|otf|woff|woff2|eot)$/i.test(node.name);
+              case 'misc':
+                return node.name.endsWith('.txt') || node.name.endsWith('.xml') || node.name.endsWith('.opf') || node.name.endsWith('.ncx');
               case 'selected':
                 // Mock: return currently selected files (in real app, this would be from selection state)
-                return currentFilePath && node.path === currentFilePath;
+                return currentFile && node.path === currentFile.path;
               case 'open':
                 // Mock: return currently open files (in real app, this would be from open tabs state)
-                return currentFilePath && node.path === currentFilePath;
-              case 'marked':
-                // Mock: return marked text files (in real app, this would be from marked state)
-                return currentFilePath && node.path === currentFilePath;
+                return currentFile && node.path === currentFile.path;
               default:
                 return false;
             }
@@ -268,15 +305,17 @@ This is another paragraph with some sample text for testing search functionality
           const flags = isCaseSensitive ? 'g' : 'gi';
           
           switch (searchMode) {
-            case 'regex':
-              searchPattern = new RegExp(searchText, flags);
-              break;
-            case 'text':
-            default:
-              const escapedText = searchText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-              searchPattern = new RegExp(escapedText, flags);
-              break;
+          case 'regex': {
+            searchPattern = new RegExp(searchText, flags);
+            break;
           }
+          case 'text':
+          default: {
+            const escapedText = searchText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            searchPattern = new RegExp(escapedText, flags);
+            break;
+          }
+        }
           
           let match;
           while ((match = searchPattern.exec(line)) !== null) {
@@ -365,6 +404,28 @@ This is another paragraph with some sample text for testing search functionality
     }
   };
   
+  const handleFindClick = () => {
+    if (searchText.trim() && searchResults.length === 0) {
+      performSearch();
+    } else if (searchResults.length > 0) {
+      // Always go to next result when Find button is clicked
+      goToNextResult();
+    }
+  };
+  
+  // 处理搜索方向变化
+  const handleDirectionChange = (direction: string) => {
+    setSearchDirection(direction);
+    // 如果有搜索结果，立即按新方向跳转
+    if (searchResults.length > 0) {
+      if (direction === 'down') {
+        goToNextResult();
+      } else {
+        goToPrevResult();
+      }
+    }
+  };
+  
 
 
   // Replace functions
@@ -398,7 +459,7 @@ This is another paragraph with some sample text for testing search functionality
     
     lines[currentResult.line - 1] = newLine;
     const newContent = lines.join('\n');
-    updateFileContent(newContent);
+    updateFileContent(currentFile.path, newContent);
     
     showToast('Replaced 1 occurrence');
     
@@ -439,7 +500,7 @@ This is another paragraph with some sample text for testing search functionality
     
     lines[currentResult.line - 1] = newLine;
     const newContent = lines.join('\n');
-    updateFileContent(newContent);
+    updateFileContent(currentFile.path, newContent);
     
     showToast('Replaced 1 occurrence');
     
@@ -469,19 +530,21 @@ This is another paragraph with some sample text for testing search functionality
     const flags = isCaseSensitive ? 'g' : 'gi';
     
     switch (searchMode) {
-      case 'regex':
+      case 'regex': {
         const regexPattern = new RegExp(searchText, flags);
         newContent = newContent.replace(regexPattern, replaceText);
         break;
+      }
       case 'text':
-      default:
+      default: {
         const escapedText = searchText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const textPattern = new RegExp(escapedText, flags);
         newContent = newContent.replace(textPattern, replaceText);
         break;
+      }
     }
     
-    updateFileContent(newContent);
+    updateFileContent(currentFile.path, newContent);
     
     showToast(`Replaced ${currentFileResults.length} occurrences`);
   };
@@ -512,15 +575,31 @@ This is another paragraph with some sample text for testing search functionality
   
   if (!visible) return null;
 
+  // Theme styles
+  const modalBg = isDarkMode ? 'bg-gray-800' : 'bg-white';
+  const borderColor = isDarkMode ? 'border-gray-600' : 'border-gray-200';
+  const textColor = isDarkMode ? 'text-gray-200' : 'text-gray-900';
+  const headerBg = isDarkMode ? 'bg-gray-700' : 'bg-gray-50';
+  const closeBtnHover = isDarkMode ? 'hover:bg-gray-600' : 'hover:bg-gray-100';
+  const inputBg = isDarkMode ? 'bg-gray-700' : 'bg-white';
+  const inputBorder = isDarkMode ? 'border-gray-600' : 'border-gray-300';
+  const inputFocus = isDarkMode ? 'focus:border-blue-400' : 'focus:border-blue-500';
+  const buttonBg = isDarkMode ? 'bg-gray-600' : 'bg-gray-100';
+  const buttonHover = isDarkMode ? 'hover:bg-gray-500' : 'hover:bg-gray-200';
+  const buttonBorder = isDarkMode ? 'border-gray-500' : 'border-gray-300';
+  const resultsBg = isDarkMode ? 'bg-gray-700' : 'bg-gray-50';
+  const resultsTextColor = isDarkMode ? 'text-gray-300' : 'text-gray-700';
+  const previewBg = isDarkMode ? 'bg-gray-800' : 'bg-white';
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-xl w-[600px] max-w-[90vw] max-h-[70vh] overflow-y-auto">
+      <div className={`${modalBg} rounded-lg shadow-xl w-[600px] max-w-[90vw] max-h-[70vh] overflow-y-auto`}>
         {/* Header with close button */}
-        <div className="flex items-center justify-between p-3 border-b">
-          <h2 className="text-base font-semibold">Find and Replace</h2>
+        <div className={`flex items-center justify-between p-3 border-b ${borderColor} ${headerBg}`}>
+          <h2 className={`text-base font-semibold ${textColor}`}>Find and Replace</h2>
           <button
             onClick={onClose}
-            className="p-1 hover:bg-gray-100 rounded"
+            className={`p-1 ${closeBtnHover} rounded`}
           >
             <X className="w-4 h-4 text-red-500" />
           </button>
@@ -530,34 +609,28 @@ This is another paragraph with some sample text for testing search functionality
         <div className="p-4 space-y-3">
           {/* Find Row */}
           <div className="flex items-center gap-2">
-            <label className="w-12 text-xs font-medium text-right">Find:</label>
+            <label className={`w-12 text-xs font-medium text-right ${textColor}`}>Find:</label>
             <input
               ref={searchInputRef}
               type="text"
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
               onKeyDown={handleKeyDown}
-              className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:border-blue-500"
+              className={`flex-1 px-2 py-1 text-sm border ${inputBorder} ${inputBg} ${textColor} rounded focus:outline-none ${inputFocus}`}
               placeholder=""
             />
+
             <button
-              onClick={() => {
-                if (searchText.trim() && searchResults.length === 0) {
-                  // If there's search text but no results, perform search first
-                  performSearch();
-                } else if (searchResults.length > 0) {
-                  goToNextResult();
-                }
-              }}
+              onClick={handleFindClick}
               disabled={!searchText.trim()}
-              className="px-3 py-1 bg-gray-100 hover:bg-gray-200 border border-gray-300 rounded text-xs font-medium disabled:opacity-50"
+              className={`px-3 py-1 ${buttonBg} ${buttonHover} border ${buttonBorder} ${textColor} rounded text-xs font-medium disabled:opacity-50`}
             >
-              {searchResults.length > 0 ? 'Next' : 'Find'}
+              Find
             </button>
             <button
               onClick={replaceAndFindNext}
               disabled={searchResults.length === 0}
-              className="px-3 py-1 bg-gray-100 hover:bg-gray-200 border border-gray-300 rounded text-xs font-medium disabled:opacity-50"
+              className={`px-3 py-1 ${buttonBg} ${buttonHover} border ${buttonBorder} ${textColor} rounded text-xs font-medium disabled:opacity-50`}
             >
               Replace and Find
             </button>
@@ -565,34 +638,61 @@ This is another paragraph with some sample text for testing search functionality
           
           {/* Replace Row */}
           <div className="flex items-center gap-2">
-            <label className="w-12 text-xs font-medium text-right">Replace:</label>
+            <label className={`w-12 text-xs font-medium text-right ${textColor}`}>Replace:</label>
             <input
               type="text"
               value={replaceText}
               onChange={(e) => setReplaceText(e.target.value)}
-              className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:border-blue-500"
+              className={`flex-1 px-2 py-1 text-sm border ${inputBorder} ${inputBg} ${textColor} rounded focus:outline-none ${inputFocus}`}
               placeholder=""
             />
             <button
               onClick={replaceCurrentMatch}
               disabled={searchResults.length === 0}
-              className="px-3 py-1 bg-gray-100 hover:bg-gray-200 border border-gray-300 rounded text-xs font-medium disabled:opacity-50"
+              className={`px-3 py-1 ${buttonBg} ${buttonHover} border ${buttonBorder} ${textColor} rounded text-xs font-medium disabled:opacity-50`}
             >
               Replace
             </button>
             <button
               onClick={replaceAllMatches}
               disabled={searchResults.length === 0}
-              className="px-3 py-1 bg-gray-100 hover:bg-gray-200 border border-gray-300 rounded text-xs font-medium disabled:opacity-50"
+              className={`px-3 py-1 ${buttonBg} ${buttonHover} border ${buttonBorder} ${textColor} rounded text-xs font-medium disabled:opacity-50`}
             >
               Replace all
             </button>
           </div>
           
-          {/* Options Row */}
+          {/* Search Mode and Scope Row */}
           <div className="flex items-center gap-2">
-            <label className="w-12 text-xs font-medium text-right">Options:</label>
-            <label className="flex items-center gap-1 text-xs">
+            <label className={`w-12 text-xs font-medium text-right ${textColor}`}>Mode:</label>
+            <CustomSelect
+              value={searchMode}
+              onChange={setSearchMode}
+              options={modeOptions}
+              className="w-20"
+              isDarkMode={isDarkMode}
+            />
+            <label className={`text-xs font-medium ml-2 ${textColor}`}>Scope:</label>
+            <CustomSelect
+              value={searchScope}
+              onChange={setSearchScope}
+              options={scopeOptions}
+              className="w-40"
+              isDarkMode={isDarkMode}
+            />
+          </div>
+          
+          {/* Direction and Options Row */}
+          <div className="flex items-center gap-2">
+            <label className={`w-12 text-xs font-medium text-right ${textColor}`}>Direction:</label>
+            <CustomSelect
+              value={searchDirection}
+              onChange={handleDirectionChange}
+              options={directionOptions}
+              className="w-24"
+              isDarkMode={isDarkMode}
+            />
+            <label className={`flex items-center gap-1 text-xs ${textColor} ml-4`}>
               <input
                 type="checkbox"
                 checked={isCaseSensitive}
@@ -601,7 +701,7 @@ This is another paragraph with some sample text for testing search functionality
               />
               Case sensitive
             </label>
-            <label className="flex items-center gap-1 text-xs">
+            <label className={`flex items-center gap-1 text-xs ${textColor}`}>
               <input
                 type="checkbox"
                 checked={isWrap}
@@ -614,7 +714,7 @@ This is another paragraph with some sample text for testing search functionality
           
           {/* Results Info */}
           {searchResults.length > 0 && (
-            <div className="flex items-center justify-between text-xs text-gray-600 pt-1 border-t">
+            <div className={`flex items-center justify-between text-xs ${resultsTextColor} pt-1 border-t ${borderColor}`}>
               <span>
                 Found {searchResults.length} results
                 {searchResults.length > 0 && ` in ${new Set(searchResults.map(r => r.fileName)).size} files`}
@@ -626,14 +726,14 @@ This is another paragraph with some sample text for testing search functionality
                 <button
                   onClick={goToPrevResult}
                   disabled={searchResults.length === 0}
-                  className="p-0.5 hover:bg-gray-100 rounded disabled:opacity-50 text-xs"
+                  className={`p-0.5 ${buttonHover} rounded disabled:opacity-50 text-xs ${textColor}`}
                 >
                   ↑
                 </button>
                 <button
                   onClick={goToNextResult}
                   disabled={searchResults.length === 0}
-                  className="p-0.5 hover:bg-gray-100 rounded disabled:opacity-50 text-xs"
+                  className={`p-0.5 ${buttonHover} rounded disabled:opacity-50 text-xs ${textColor}`}
                 >
                   ↓
                 </button>
@@ -643,15 +743,15 @@ This is another paragraph with some sample text for testing search functionality
           
           {/* Results Preview */}
           {searchResults.length > 0 && (
-            <div className="mt-2 p-2 bg-gray-50 rounded border max-h-24 overflow-y-auto">
-              <div className="text-xs font-medium text-gray-700 mb-1">
+            <div className={`mt-2 p-2 ${resultsBg} rounded border ${borderColor} max-h-24 overflow-y-auto`}>
+              <div className={`text-xs font-medium ${resultsTextColor} mb-1`}>
                 Current Result:
               </div>
               <div className="text-xs">
-                <div className="font-medium">
+                <div className={`font-medium ${textColor}`}>
                   {searchResults[currentResultIndex]?.fileName}:{searchResults[currentResultIndex]?.line}:{searchResults[currentResultIndex]?.column}
                 </div>
-                <div className="mt-1 font-mono text-xs bg-white p-1 rounded border">
+                <div className={`mt-1 font-mono text-xs ${previewBg} ${textColor} p-1 rounded border ${borderColor}`}>
                   {searchResults[currentResultIndex]?.context}
                 </div>
               </div>

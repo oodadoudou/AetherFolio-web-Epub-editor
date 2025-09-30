@@ -3,17 +3,24 @@
 import os
 import re
 import html
+import uuid
+import hashlib
 from typing import List, Dict, Optional, Tuple
 from pathlib import Path
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from backend.services.base import BaseService
-from backend.models.schemas import (
-    ReplaceRule, ReplaceResult, FileContent, FileType
+from services.base import BaseService
+from db.models.schemas import (
+    ReplaceRule, ReplaceResult, FileContent, UploadResponse, FileContentResponse,
+    FileNode, BookMetadata, FileInfo
 )
-from backend.core.config import settings
-from backend.core.security import security_validator
+from db.models.file import FileType
+from models.session import Session
+from services.session_service import session_service
+from fastapi import HTTPException
+from core.config import settings
+from core.security import security_validator
 
 
 @dataclass
@@ -30,6 +37,8 @@ class TextService(BaseService):
     
     def __init__(self):
         super().__init__("text")
+        # 初始化文件内容存储字典，用于存储每个会话的文件内容
+        self.file_contents = {}
     
     async def _initialize(self):
         """初始化服务"""
@@ -381,8 +390,8 @@ class TextService(BaseService):
         """
         async with self.performance_context("read_file_content"):
             try:
-                # 构建会话目录路径
-                session_dir = Path(settings.session_dir) / session_id
+                # 使用统一的文本会话目录路径
+                session_dir = Path("backend/sessions/text") / session_id
                 
                 # 查找文本文件
                 text_extensions = ['.txt', '.text', '.md', '.markdown']
@@ -416,8 +425,8 @@ class TextService(BaseService):
         """
         async with self.performance_context("write_file_content"):
             try:
-                # 构建会话目录路径
-                session_dir = Path(settings.session_dir) / session_id
+                # 使用统一的文本会话目录路径
+                session_dir = Path("backend/sessions/text") / session_id
                 
                 # 查找现有文本文件或使用默认文件名
                 text_extensions = ['.txt', '.text', '.md', '.markdown']
@@ -441,6 +450,193 @@ class TextService(BaseService):
             except Exception as e:
                 self.log_error("Failed to write file content", e, session_id=session_id)
                 raise
+    
+    async def process_upload(self, temp_file_path: str, filename: str, user_id: str) -> UploadResponse:
+         """处理文本文件上传
+         
+         Args:
+             temp_file_path: 临时文件路径
+             filename: 文件名
+             user_id: 用户ID
+             
+         Returns:
+             UploadResponse: 上传响应
+         """
+         try:
+             # 获取文件大小
+             file_size = os.path.getsize(temp_file_path)
+             
+             # 读取文本文件
+             file_path = Path(temp_file_path)
+             file_content = await self.read_text_file(file_path)
+             
+             # 创建会话记录
+             session_metadata = {
+                 'original_filename': filename,
+                 'file_size': file_size,
+                 'title': Path(filename).stem,
+                 'author': 'Unknown',
+                 'language': 'zh',
+                 'file_type': 'txt',
+                 'file_count': 1
+             }
+             session_id = await session_service.create_session(session_metadata)
+             
+             # 获取会话目录路径
+             session_dir = Path(session_service.get_session_dir(session_id, 'txt'))
+             session_dir.mkdir(parents=True, exist_ok=True)
+             
+             # 将文件内容保存到会话目录
+             target_file_path = session_dir / filename
+             await self.write_text_file(target_file_path, file_content.content, file_content.encoding)
+             
+             # 将文件内容存储到内存中，用于跨文件搜索
+             if session_id not in self.file_contents:
+                 self.file_contents[session_id] = {}
+             self.file_contents[session_id][filename] = file_content.content.encode('utf-8')
+             
+             # 创建简单的文件树（只有一个文件）
+             file_node = FileNode(
+                 name=filename,
+                 path=filename,
+                 type=FileType.FILE,
+                 size=file_content.size
+             )
+             file_tree = [file_node]
+             
+             # 创建简单的元数据
+             metadata = BookMetadata(
+                 title=Path(filename).stem,
+                 author="Unknown",
+                 language="zh",
+                 description="Text file upload"
+             )
+             
+             # 创建文件信息
+             
+             # 计算文件校验和
+             with open(temp_file_path, 'rb') as f:
+                 file_hash = hashlib.sha256(f.read()).hexdigest()
+             
+             file_info = FileInfo(
+                 filename=filename,
+                 size=file_size,
+                 type="TEXT",
+                 mime_type="text/plain",
+                 encoding=file_content.encoding,
+                 checksum=file_hash
+             )
+             
+             # 返回上传响应
+             return UploadResponse(
+                 session_id=session_id,
+                 file_tree=file_tree,
+                 metadata=metadata,
+                 original_filename=filename,
+                 file_size=file_size,
+                 message="文本文件上传成功",
+                 file_info=file_info
+             )
+             
+         except HTTPException:
+             raise
+         except Exception as e:
+             self.log_error("Failed to process upload", e, user_id=user_id)
+             raise HTTPException(
+                 status_code=500,
+                 detail="处理上传失败"
+             )
+    
+    async def get_file_content(self, session_id: str, file_path: str, user_id: str) -> FileContentResponse:
+        """获取文件内容
+        
+        Args:
+            session_id: 会话ID
+            file_path: 文件路径
+            user_id: 用户ID
+            
+        Returns:
+            FileContentResponse: 文件内容响应
+        """
+        try:
+            # 获取会话信息
+            session = await session_service.get_session(session_id)
+            if not session:
+                raise HTTPException(status_code=404, detail="会话不存在")
+            
+            # 获取会话目录路径
+            session_dir = Path(session_service.get_session_dir(session_id, 'txt'))
+            target_file_path = session_dir / file_path
+            
+            # 检查文件是否存在
+            if not target_file_path.exists():
+                raise HTTPException(status_code=404, detail="文件不存在")
+            
+            # 读取文件内容
+            file_content = await self.read_text_file(target_file_path)
+            
+            return FileContentResponse(
+                content=file_content.content,
+                encoding=file_content.encoding,
+                size=file_content.size,
+                mime_type=file_content.mime_type,
+                last_modified=file_content.last_modified
+            )
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            self.log_error("Failed to get file content", e, session_id=session_id, user_id=user_id)
+            raise HTTPException(
+                status_code=500,
+                detail="获取文件内容失败"
+            )
+    
+    async def save_file_content(self, session_id: str, file_path: str, content: str, user_id: str) -> bool:
+        """保存文件内容
+        
+        Args:
+            session_id: 会话ID
+            file_path: 文件路径
+            content: 文件内容
+            user_id: 用户ID
+            
+        Returns:
+            bool: 是否保存成功
+        """
+        try:
+            # 获取会话信息
+            session = await session_service.get_session(session_id)
+            if not session:
+                raise HTTPException(status_code=404, detail="会话不存在")
+            
+            # 获取会话目录路径
+            session_dir = Path(session_service.get_session_dir(session_id, 'txt'))
+            target_file_path = session_dir / file_path
+            
+            # 确保目录存在
+            target_file_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # 保存文件内容
+            await self.write_text_file(target_file_path, content)
+            
+            # 同时更新内存中的文件内容
+            if session_id not in self.file_contents:
+                self.file_contents[session_id] = {}
+            self.file_contents[session_id][file_path] = content.encode('utf-8')
+            
+            self.log_info("File content saved to disk", session_id=session_id, file_path=file_path, size=len(content))
+            
+            return True
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            self.log_error("Failed to save file content", e, session_id=session_id, user_id=user_id)
+            raise HTTPException(
+                status_code=500,
+                detail="保存文件内容失败"
+            )
     
     async def _cleanup(self):
         """清理服务资源"""

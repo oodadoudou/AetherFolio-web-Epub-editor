@@ -5,6 +5,7 @@ import { useAppStore } from '../store';
 import { EpubService } from '../services/epub';
 import { FilesService } from '../services/files';
 import type { EpubMetadata, FileNode } from '../types';
+import { FileType } from '../types/api';
 
 export interface EpubEditorState {
   isLoading: boolean;
@@ -41,8 +42,9 @@ export function useEpubEditor(): UseEpubEditorReturn {
   });
 
   const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const epubService = useRef(new EpubService());
-  const filesService = useRef(new FilesService());
+  // 使用导入的服务实例
+  // const epubService = useRef(new EpubService());
+  // const filesService = useRef(new FilesService());
 
   // Get store actions
   const {
@@ -119,22 +121,19 @@ export function useEpubEditor(): UseEpubEditorReturn {
       };
       
       const mockFileTree: FileNode[] = [{
-        id: 'root',
         name: 'EPUB Root',
-        type: 'directory',
+        type: FileType.DIRECTORY,
         path: '/',
         children: [
           {
-            id: 'meta-inf',
             name: 'META-INF',
-            type: 'directory',
+            type: FileType.DIRECTORY,
             path: '/META-INF',
             children: [],
           },
           {
-            id: 'oebps',
             name: 'OEBPS',
-            type: 'directory',
+            type: FileType.DIRECTORY,
             path: '/OEBPS',
             children: [],
           },
@@ -142,7 +141,7 @@ export function useEpubEditor(): UseEpubEditorReturn {
       }];
       
       setMetadata(mockMetadata);
-      setFileTree(mockFileTree);
+      setFileTree(mockFileTree as any);
       markAsSaved();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to load EPUB';
@@ -221,15 +220,14 @@ export function useEpubEditor(): UseEpubEditorReturn {
       };
       
       const newFileTree: FileNode[] = [{
-        id: 'new-root',
         name: 'New EPUB',
-        type: 'directory',
+        type: FileType.DIRECTORY,
         path: '/',
         children: [],
       }];
       
       setMetadata(newMetadata);
-      setFileTree(newFileTree);
+      setFileTree(newFileTree as any);
       markAsSaved();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to create new EPUB';

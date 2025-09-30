@@ -1,79 +1,53 @@
-# Export endpoint
-# Handles EPUB export and download
+"""文件导出API路由"""
 
-import os
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
-from typing import Dict, Any
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from typing import Optional
+import urllib.parse
 
-from backend.services.session_service import session_service
-from backend.services.epub_service import epub_service
-from backend.core.config import settings
-from backend.core.logging import security_logger
+from services.file_service import file_service
+from core.logging import performance_logger
 
-router = APIRouter(prefix="/export", tags=["export"])
+router = APIRouter(prefix="/api/v1/export", tags=["export"])
 
 
-@router.get(
-    "/{session_id}",
-    summary="下载处理后的EPUB",
-    description="下载经过批量替换处理的EPUB文件"
-)
-async def download_processed_epub(session_id: str):
-    """下载处理后的EPUB文件
-    
-    Args:
-        session_id: 会话ID
-        
-    Returns:
-        FileResponse: EPUB文件
-    """
+@router.get("/{session_id}")
+async def export_file(
+    session_id: str,
+    format: Optional[str] = Query("original", description="导出格式: original, epub, txt")
+):
+    """导出文件"""
     try:
-        # 验证会话
-        session_info = await session_service.get_session(session_id)
-        if not session_info:
-            raise HTTPException(
-                status_code=404,
-                detail={"success": False, "error": "会话不存在"}
-            )
-        
-        # 获取处理后的EPUB文件路径
-        epub_path = os.path.join(settings.session_dir, session_id, "processed.epub")
-        
-        # 如果处理后的文件不存在，尝试使用原始文件
-        if not os.path.exists(epub_path):
-            epub_path = os.path.join(settings.session_dir, session_id, "original.epub")
-        
-        if not os.path.exists(epub_path):
-            raise HTTPException(
-                status_code=404,
-                detail={"success": False, "error": "EPUB文件不存在"}
-            )
-        
-        # 记录下载操作
-        security_logger.log_info(
-            "EPUB file downloaded",
+        result = await file_service.export_file(
             session_id=session_id,
-            file_path=epub_path
+            format=format
         )
         
-        # 返回文件
-        return FileResponse(
-            path=epub_path,
-            filename=f"processed_{session_id}.epub",
-            media_type="application/epub+zip"
+        performance_logger.info(
+            f"File exported",
+            extra={
+                "session_id": session_id,
+                "format": format
+            }
         )
         
-    except HTTPException:
-        raise
+        # 对文件名进行URL编码以支持中文字符
+        encoded_filename = urllib.parse.quote(result.filename, safe='')
+        
+        return StreamingResponse(
+            result.content_stream,
+            media_type=result.media_type,
+            headers={
+                "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
+            }
+        )
+        
+    except FileNotFoundError as e:
+        performance_logger.warning(f"Export failed - not found: {str(e)}")
+        raise HTTPException(status_code=404, detail="会话或文件不存在")
+    except ValueError as e:
+        performance_logger.warning(f"Export failed - invalid request: {str(e)}")
+        raise HTTPException(status_code=400, detail="请求参数无效")
     except Exception as e:
-        security_logger.log_error(
-            "Failed to download EPUB file",
-            e,
-            session_id=session_id
-        )
-        
-        raise HTTPException(
-            status_code=500,
-            detail={"success": False, "error": "下载失败"}
-        )
+        performance_logger.error(f"Export failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="文件导出失败")

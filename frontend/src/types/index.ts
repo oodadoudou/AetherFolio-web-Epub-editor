@@ -3,6 +3,8 @@
 
 export * from './api';
 export * from './epub';
-export * from './files';
-export * from './search';
 export * from './ui';
+
+// 避免重复导出，只从api.ts导出FileNode, ReplaceRule, SearchOptions
+// export * from './files';
+// export * from './search';

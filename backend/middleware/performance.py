@@ -8,8 +8,8 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
-from backend.core.logging import performance_logger, security_logger
-from backend.core.config import settings
+from core.logging import performance_logger, security_logger
+from core.config import settings
 
 
 class PerformanceMiddleware(BaseHTTPMiddleware):
@@ -43,7 +43,7 @@ class PerformanceMiddleware(BaseHTTPMiddleware):
         user_agent = request.headers.get("user-agent", "")
         
         # 记录请求开始
-        performance_logger.logger.info(
+        performance_logger.info(
             "Request started",
             extra={
                 "request_id": request_id,
@@ -70,7 +70,7 @@ class PerformanceMiddleware(BaseHTTPMiddleware):
             log_level = "warning" if process_time > self.slow_request_threshold else "info"
             
             if log_level == "warning":
-                performance_logger.logger.warning(
+                performance_logger.warning(
                     "Request completed (slow)",
                     extra={
                         "request_id": request_id,
@@ -84,7 +84,7 @@ class PerformanceMiddleware(BaseHTTPMiddleware):
                     }
                 )
             else:
-                performance_logger.logger.info(
+                performance_logger.info(
                     "Request completed",
                     extra={
                         "request_id": request_id,
@@ -100,7 +100,7 @@ class PerformanceMiddleware(BaseHTTPMiddleware):
             
             # 如果是慢请求，额外记录
             if process_time > self.slow_request_threshold:
-                security_logger.logger.warning(
+                security_logger.warning(
                     "Slow request detected",
                     extra={
                         "request_id": request_id,
@@ -119,7 +119,7 @@ class PerformanceMiddleware(BaseHTTPMiddleware):
             process_time = time.time() - start_time
             
             # 记录错误
-            performance_logger.logger.error(
+            performance_logger.error(
                 "Request failed",
                 extra={
                     "error": str(e),
@@ -184,7 +184,7 @@ class RequestSizeMiddleware(BaseHTTPMiddleware):
             try:
                 size = int(content_length)
                 if size > self.max_size:
-                    security_logger.logger.warning(
+                    security_logger.warning(
                         "Request size exceeded",
                         extra={
                             "content_length": size,
@@ -291,7 +291,7 @@ class ErrorHandlingMiddleware(BaseHTTPMiddleware):
             import traceback
             request_id = getattr(request.state, "request_id", "unknown")
             
-            security_logger.logger.error(
+            security_logger.error(
                 "Unhandled exception in middleware",
                 extra={
                     "error": str(e),

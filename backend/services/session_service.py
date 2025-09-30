@@ -1,65 +1,45 @@
-"""会话管理服务"""
+"""会话管理服务 - 物理文件存储版本"""
 
 import asyncio
-import time
 import uuid
 import json
+import os
+import shutil
+from pathlib import Path
 from typing import Dict, Optional, Any, List
 from datetime import datetime, timedelta
+from fastapi import HTTPException
+from threading import Lock
 
-from backend.services.base import BaseService
-from backend.models.session import Session
-from backend.models.schemas import ResponseStatus, ErrorCode
-from backend.core.config import settings
-from backend.core.security import security_validator
+from services.base import BaseService
+from core.config import settings
+from core.security import security_validator
 
 
 class SessionService(BaseService):
-    """会话管理服务"""
+    """会话管理服务 - 物理文件存储版本"""
     
     def __init__(self):
         super().__init__("session")
-        self.sessions: Dict[str, Session] = {}
-        self.session_data: Dict[str, Dict[str, Any]] = {}
-        self._cleanup_task: Optional[asyncio.Task] = None
-        self._redis_client = None
+        self._lock = Lock()  # 线程安全锁
+        # 使用项目根目录下的data/session
+        project_root = Path(__file__).parent.parent.parent
+        self.session_base_dir = project_root / "data" / "session"
+        
+        # 确保session目录存在
+        self.session_base_dir.mkdir(parents=True, exist_ok=True)
+        (self.session_base_dir / "epub").mkdir(exist_ok=True)
+        (self.session_base_dir / "txt").mkdir(exist_ok=True)
+        (self.session_base_dir / "temp").mkdir(exist_ok=True)
+        
+        self.log_info("会话服务初始化完成（物理文件存储）")
     
     async def _initialize(self):
         """初始化服务"""
-        # 尝试连接Redis（可选）
-        try:
-            import redis.asyncio as redis
-            self._redis_client = redis.from_url(
-                settings.redis_url,
-                db=settings.redis_db,
-                password=settings.redis_password,
-                decode_responses=True
-            )
-            # 测试连接
-            await self._redis_client.ping()
-            self.log_info("Redis connected successfully")
-        except Exception as e:
-            self.log_warning("Redis connection failed, using memory storage", error=str(e))
-            self._redis_client = None
-        
-        # 启动清理任务
-        self._cleanup_task = asyncio.create_task(self._cleanup_expired_sessions())
-        self.log_info("Session service initialized")
+        self.log_info("Session service initialized (file storage)")
     
     async def _cleanup(self):
         """清理服务"""
-        if self._cleanup_task:
-            self._cleanup_task.cancel()
-            try:
-                await self._cleanup_task
-            except asyncio.CancelledError:
-                pass
-        
-        if self._redis_client:
-            await self._redis_client.close()
-        
-        self.sessions.clear()
-        self.session_data.clear()
         self.log_info("Session service cleaned up")
     
     async def create_session(self, metadata: Optional[Dict[str, Any]] = None) -> str:
@@ -71,68 +51,179 @@ class SessionService(BaseService):
         Returns:
             str: 会话ID
         """
-        # 检查会话数量限制
-        if len(self.sessions) >= settings.max_sessions:
-            # 清理过期会话
-            await self._cleanup_expired_sessions_sync()
-            
-            # 如果仍然超过限制，拒绝创建
-            if len(self.sessions) >= settings.max_sessions:
-                raise Exception("会话数量已达上限")
-        
         # 生成会话ID
         session_id = str(uuid.uuid4())
         
         # 创建会话信息
-        now = datetime.now()
-        session = Session(
-            session_id=session_id,
-            epub_path=metadata.get('extraction_path', '') if metadata else '',
-            upload_time=now,
-            last_accessed=now,
-            expires_at=now + timedelta(seconds=settings.session_timeout),
-            original_filename=metadata.get('original_filename') if metadata else None,
-            file_size=metadata.get('file_size') if metadata else None,
-            extracted_path=metadata.get('extraction_path') if metadata else None,
-            metadata=metadata or {}
-        )
+        now = datetime.utcnow()
         
-        # 存储会话
-        await self._store_session(session_id, session)
-        
-        self.log_info("Session created", session_id=session_id)
-        return session_id
+        try:
+            with self._lock:
+                # 检查会话数量限制
+                active_sessions = await self._get_active_sessions_count()
+                
+                if active_sessions >= settings.max_sessions:
+                    raise Exception("会话数量已达上限")
+                
+                # 确定文件类型和会话目录
+                file_type = metadata.get('file_type', 'unknown') if metadata else 'unknown'
+                session_dir = self._get_session_dir_path(session_id, file_type)
+                session_dir.mkdir(parents=True, exist_ok=True)
+                
+                # 创建会话记录（永久有效直到主动删除）
+                session_data = {
+                    'session_id': session_id,
+                    'epub_path': metadata.get('extracted_path', '') if metadata else '',
+                    'upload_time': now.isoformat(),
+                    'last_accessed': now.isoformat(),
+                    'status': 'active',
+                    'original_filename': metadata.get('original_filename') if metadata else None,
+                    'file_size': metadata.get('file_size') if metadata else None,
+                    'extracted_path': str(session_dir) if metadata else None,
+                    'session_metadata': metadata or {},
+                    'file_type': file_type
+                }
+                
+                # 保存会话数据到文件
+                session_file = session_dir / "session.json"
+                with open(session_file, 'w', encoding='utf-8') as f:
+                    json.dump(session_data, f, ensure_ascii=False, indent=2, default=str)
+                
+                # 详细的会话创建日志
+                self.log_info(f"Session created successfully", 
+                             session_id=session_id, 
+                             session_dir=str(session_dir),
+                             metadata=metadata)
+                
+                # 立即验证会话是否可以被访问
+                if session_file.exists():
+                    self.log_info(f"Session creation verified - session accessible", 
+                                 session_id=session_id,
+                                 status=session_data.get('status'))
+                else:
+                    self.log_error(f"Session creation failed - session file not accessible", 
+                                  session_id=session_id)
+                
+                return session_id
+                
+        except Exception as e:
+            self.log_error("Failed to create session", e, session_id=session_id)
+            raise
     
-    async def get_session(self, session_id: str) -> Optional[Session]:
+    async def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         """获取会话信息
         
         Args:
             session_id: 会话ID
             
         Returns:
-            Optional[Session]: 会话信息
+            Optional[Dict[str, Any]]: 会话信息字典
         """
         try:
             security_validator.validate_session_id(session_id)
-        except Exception:
-            # 如果会话ID验证失败，返回None而不是抛出异常
+        except Exception as e:
+            self.log_error(f"Invalid session ID format: {session_id}", e)
             return None
         
-        session = await self._load_session(session_id)
-        if not session:
+        try:
+            with self._lock:
+                # 查找会话文件
+                session_file = self._find_session_file(session_id)
+                
+                if not session_file or not session_file.exists():
+                    self.log_info(f"Session not found in file storage", 
+                                 session_id=session_id)
+                    return None
+                
+                # 读取会话数据
+                with open(session_file, 'r', encoding='utf-8') as f:
+                    session_data = json.load(f)
+                
+                # 检查会话状态
+                if session_data.get('status') != 'active':
+                    self.log_info(f"Session found but not active", session_id=session_id, status=session_data.get('status'))
+                    return None
+                
+                # 更新最后访问时间
+                now = datetime.utcnow()
+                session_data['last_accessed'] = now.isoformat()
+                
+                # 保存更新后的会话数据
+                with open(session_file, 'w', encoding='utf-8') as f:
+                    json.dump(session_data, f, ensure_ascii=False, indent=2, default=str)
+                
+                # 转换时间字符串为datetime对象（为了兼容性）
+                if isinstance(session_data.get('upload_time'), str):
+                    session_data['upload_time'] = datetime.fromisoformat(session_data['upload_time'])
+                if isinstance(session_data.get('last_accessed'), str):
+                    session_data['last_accessed'] = datetime.fromisoformat(session_data['last_accessed'])
+                
+                self.log_info(f"Session found and accessed successfully", 
+                             session_id=session_id, 
+                             last_accessed=now,
+                             session_status=session_data.get('status'),
+                             original_filename=session_data.get('original_filename'))
+                
+                return session_data
+                
+        except Exception as e:
+            self.log_error("Failed to get session", e, session_id=session_id)
             return None
-        
-        # 检查会话是否过期
-        if session.expires_at < datetime.now():
-            await self.delete_session(session_id)
-            return None
-        
-        # 更新最后访问时间
-        session.last_accessed = datetime.now()
-        await self._store_session(session_id, session)
-        
-        return session
     
+    def _get_session_dir_path(self, session_id: str, file_type: str) -> Path:
+        """获取会话目录路径
+        
+        Args:
+            session_id: 会话ID
+            file_type: 文件类型 (epub, txt, temp, unknown)
+            
+        Returns:
+            Path: 会话目录路径
+        """
+        if file_type in ['epub', 'txt', 'temp']:
+            return self.session_base_dir / file_type / session_id
+        else:
+            return self.session_base_dir / "txt" / session_id  # 默认为txt类型
+    
+    def _find_session_file(self, session_id: str) -> Optional[Path]:
+        """查找会话文件
+        
+        Args:
+            session_id: 会话ID
+            
+        Returns:
+            Optional[Path]: 会话文件路径
+        """
+        # 在epub、txt和temp目录中查找
+        for file_type in ['epub', 'txt', 'temp']:
+            session_file = self.session_base_dir / file_type / session_id / "session.json"
+            if session_file.exists():
+                return session_file
+        return None
+    
+    async def _get_active_sessions_count(self) -> int:
+        """获取活跃会话数量
+        
+        Returns:
+            int: 活跃会话数量
+        """
+        count = 0
+        for file_type in ['epub', 'txt']:
+            type_dir = self.session_base_dir / file_type
+            if type_dir.exists():
+                for session_dir in type_dir.iterdir():
+                    if session_dir.is_dir():
+                        session_file = session_dir / "session.json"
+                        if session_file.exists():
+                            try:
+                                with open(session_file, 'r', encoding='utf-8') as f:
+                                    session_data = json.load(f)
+                                if session_data.get('status') == 'active':
+                                    count += 1
+                            except Exception:
+                                continue
+        return count
+
     async def update_session(self, session_id: str, metadata: Dict[str, Any]) -> bool:
         """更新会话元数据
         
@@ -143,44 +234,72 @@ class SessionService(BaseService):
         Returns:
             bool: 是否更新成功
         """
-        session = await self.get_session(session_id)
-        if not session:
+        try:
+            with self._lock:
+                session_file = self._find_session_file(session_id)
+                if not session_file or not session_file.exists():
+                    return False
+                
+                # 读取现有会话数据
+                with open(session_file, 'r', encoding='utf-8') as f:
+                    session_data = json.load(f)
+                
+                # 获取现有元数据
+                existing_metadata = session_data['session_metadata']
+                
+                # 更新元数据
+                existing_metadata.update(metadata)
+                
+                # 更新数据
+                now = datetime.utcnow()
+                session_data['session_metadata'] = existing_metadata
+                session_data['last_accessed'] = now.isoformat()
+                
+                # 保存更新后的会话数据
+                with open(session_file, 'w', encoding='utf-8') as f:
+                    json.dump(session_data, f, ensure_ascii=False, indent=2, default=str)
+                
+                self.log_info("Session updated", session_id=session_id)
+                return True
+                
+        except Exception as e:
+            self.log_error("Failed to update session", e, session_id=session_id)
             return False
-        
-        # 更新元数据
-        session.metadata.update(metadata)
-        session.last_accessed = datetime.now()
-        
-        # 存储更新后的会话
-        await self._store_session(session_id, session)
-        
-        self.log_info("Session updated", session_id=session_id)
-        return True
     
     async def extend_session(self, session_id: str, extend_seconds: Optional[int] = None) -> bool:
-        """延长会话有效期
+        """更新会话访问时间（会话永久有效）
         
         Args:
             session_id: 会话ID
-            extend_seconds: 延长秒数，默认使用配置的超时时间
+            extend_seconds: 保留参数以兼容现有调用
             
         Returns:
-            bool: 是否延长成功
+            bool: 是否更新成功
         """
-        session = await self.get_session(session_id)
-        if not session:
+        try:
+            with self._lock:
+                session_file = self._find_session_file(session_id)
+                if not session_file or not session_file.exists():
+                    return False
+                
+                # 读取现有会话数据
+                with open(session_file, 'r', encoding='utf-8') as f:
+                    session_data = json.load(f)
+                
+                # 仅更新最后访问时间
+                now = datetime.utcnow()
+                session_data['last_accessed'] = now.isoformat()
+                
+                # 保存更新后的会话数据
+                with open(session_file, 'w', encoding='utf-8') as f:
+                    json.dump(session_data, f, ensure_ascii=False, indent=2, default=str)
+                
+                self.log_info("Session accessed", session_id=session_id)
+                return True
+                
+        except Exception as e:
+            self.log_error("Failed to update session access time", e, session_id=session_id)
             return False
-        
-        # 延长过期时间
-        extend_time = extend_seconds or settings.session_timeout
-        session.expires_at = datetime.now() + timedelta(seconds=extend_time)
-        session.last_accessed = datetime.now()
-        
-        # 存储更新后的会话
-        await self._store_session(session_id, session)
-        
-        self.log_info("Session extended", session_id=session_id, extend_seconds=extend_time)
-        return True
     
     async def delete_session(self, session_id: str) -> bool:
         """删除会话
@@ -192,307 +311,246 @@ class SessionService(BaseService):
             bool: 是否删除成功
         """
         try:
-            # 从存储中删除
-            if self._redis_client:
-                await self._redis_client.delete(f"session:{session_id}")
-                await self._redis_client.delete(f"session_data:{session_id}")
-            
-            # 从内存中删除
-            self.sessions.pop(session_id, None)
-            self.session_data.pop(session_id, None)
-            
-            self.log_info("Session deleted", session_id=session_id)
-            return True
-            
+            with self._lock:
+                session_file = self._find_session_file(session_id)
+                if not session_file or not session_file.exists():
+                    return False
+                
+                # 删除整个会话目录
+                session_dir = session_file.parent
+                if session_dir.exists():
+                    shutil.rmtree(session_dir)
+                
+                self.log_info("Session deleted", session_id=session_id)
+                return True
+                
         except Exception as e:
             self.log_error("Failed to delete session", e, session_id=session_id)
             return False
     
-    async def set_session_data(self, session_id: str, key: str, value: Any) -> bool:
-        """设置会话数据
-        
-        Args:
-            session_id: 会话ID
-            key: 数据键
-            value: 数据值
-            
-        Returns:
-            bool: 是否设置成功
-        """
-        session = await self.get_session(session_id)
-        if not session:
-            return False
-        
-        try:
-            # 获取或创建会话数据
-            if session_id not in self.session_data:
-                self.session_data[session_id] = {}
-            
-            self.session_data[session_id][key] = value
-            
-            # 如果使用Redis，同步到Redis
-            if self._redis_client:
-                data_key = f"session_data:{session_id}"
-                await self._redis_client.hset(data_key, key, json.dumps(value, default=str))
-                await self._redis_client.expire(data_key, settings.session_timeout)
-            
-            return True
-            
-        except Exception as e:
-            self.log_error("Failed to set session data", e, session_id=session_id, key=key)
-            return False
+
     
-    async def get_session_data(self, session_id: str, key: str, default: Any = None) -> Any:
-        """获取会话数据
-        
-        Args:
-            session_id: 会话ID
-            key: 数据键
-            default: 默认值
-            
-        Returns:
-            Any: 数据值
-        """
-        session = await self.get_session(session_id)
-        if not session:
-            return default
-        
-        try:
-            # 先从内存获取
-            if session_id in self.session_data and key in self.session_data[session_id]:
-                return self.session_data[session_id][key]
-            
-            # 如果使用Redis，从Redis获取
-            if self._redis_client:
-                data_key = f"session_data:{session_id}"
-                value = await self._redis_client.hget(data_key, key)
-                if value is not None:
-                    try:
-                        parsed_value = json.loads(value)
-                        # 同步到内存
-                        if session_id not in self.session_data:
-                            self.session_data[session_id] = {}
-                        self.session_data[session_id][key] = parsed_value
-                        return parsed_value
-                    except json.JSONDecodeError:
-                        return value
-            
-            return default
-            
-        except Exception as e:
-            self.log_error("Failed to get session data", e, session_id=session_id, key=key)
-            return default
+
     
-    async def delete_session_data(self, session_id: str, key: str) -> bool:
-        """删除会话数据
-        
-        Args:
-            session_id: 会话ID
-            key: 数据键
-            
-        Returns:
-            bool: 是否删除成功
+    def _cleanup_expired_sessions_internal(self):
+        """内部清理过期会话（不加锁，调用时需要已持有锁）
+        基于last_accessed时间清理过期会话
         """
         try:
-            # 从内存删除
-            if session_id in self.session_data:
-                self.session_data[session_id].pop(key, None)
+            from core.config import settings
             
-            # 从Redis删除
-            if self._redis_client:
-                data_key = f"session_data:{session_id}"
-                await self._redis_client.hdel(data_key, key)
+            now = datetime.utcnow()
+            cleaned_count = 0
             
-            return True
+            # 遍历所有会话目录
+            for file_type in ['epub', 'txt']:
+                type_dir = self.session_base_dir / file_type
+                if not type_dir.exists():
+                    continue
+                
+                for session_dir in type_dir.iterdir():
+                    if not session_dir.is_dir():
+                        continue
+                    
+                    session_file = session_dir / "session.json"
+                    if not session_file.exists():
+                        continue
+                    
+                    try:
+                        # 读取会话数据
+                        with open(session_file, 'r', encoding='utf-8') as f:
+                            session_data = json.load(f)
+                        
+                        # 检查是否过期（基于last_accessed时间）
+                        last_accessed_str = session_data.get('last_accessed')
+                        if last_accessed_str:
+                            last_accessed = datetime.fromisoformat(last_accessed_str)
+                            time_diff = (now - last_accessed).total_seconds()
+                            if time_diff > settings.session_timeout:
+                                # 删除过期会话目录
+                                shutil.rmtree(session_dir)
+                                cleaned_count += 1
+                                self.log_info(f"Session expired: {time_diff:.0f}s > {settings.session_timeout}s", session_id=session_dir.name)
+                    
+                    except Exception as e:
+                        self.log_error(f"Failed to process session {session_dir.name}", e)
+                        continue
             
+            if cleaned_count > 0:
+                self.log_info(f"Cleaned up {cleaned_count} expired sessions")
+            
+            return cleaned_count
+                
         except Exception as e:
-            self.log_error("Failed to delete session data", e, session_id=session_id, key=key)
-            return False
+            self.log_error("Failed to cleanup expired sessions", e)
+            return 0
     
-    async def list_sessions(self) -> List[Session]:
-        """列出所有活跃会话
-        
-        Returns:
-            List[Session]: 会话信息列表
-        """
-        sessions = []
-        now = datetime.now()
-        
-        # 从内存获取
-        for session in self.sessions.values():
-            if session and session.expires_at and session.expires_at > now:
-                sessions.append(session)
-        
-        # 如果使用Redis，还需要从Redis获取
-        if self._redis_client:
-            try:
-                keys = await self._redis_client.keys("session:*")
-                for key in keys:
-                    session_id = key.split(":", 1)[1]
-                    if session_id not in self.sessions:
-                        session = await self._load_session(session_id)
-                        if session and session.expires_at and session.expires_at > now:
-                            sessions.append(session)
-            except Exception as e:
-                self.log_error("Failed to list Redis sessions", e)
-        
-        return sessions
-    
-    async def _store_session(self, session_id: str, session: Session):
-        """存储会话信息"""
-        # 存储到内存
-        self.sessions[session_id] = session
-        
-        # 存储到Redis
-        if self._redis_client:
-            try:
-                session_key = f"session:{session_id}"
-                session_data = {
-                    "session_id": session.session_id,
-                    "created_at": session.upload_time.isoformat(),
-                    "last_accessed": session.last_accessed.isoformat(),
-                    "expires_at": session.expires_at.isoformat(),
-                    "epub_path": session.epub_path,
-                    "original_filename": session.original_filename or "",
-                    "file_size": str(session.file_size or 0),
-                    "extracted_path": session.extracted_path or "",
-                    "metadata": json.dumps(session.metadata)
-                }
-                
-                await self._redis_client.hset(session_key, mapping=session_data)
-                await self._redis_client.expire(session_key, settings.session_timeout)
-                
-            except Exception as e:
-                self.log_error("Failed to store session to Redis", e, session_id=session_id)
-    
-    async def _load_session(self, session_id: str) -> Optional[Session]:
-        """加载会话信息"""
-        # 先从内存获取
-        if session_id in self.sessions:
-            return self.sessions[session_id]
-        
-        # 从Redis获取
-        if self._redis_client:
-            try:
-                session_key = f"session:{session_id}"
-                session_data = await self._redis_client.hgetall(session_key)
-                
-                if session_data and all(key in session_data for key in ["session_id", "created_at", "last_accessed", "expires_at"]):
-                    # 安全地解析时间字段
-                    try:
-                        upload_time = datetime.fromisoformat(session_data["created_at"])
-                        last_accessed = datetime.fromisoformat(session_data["last_accessed"])
-                        expires_at = datetime.fromisoformat(session_data["expires_at"])
-                    except (ValueError, TypeError) as e:
-                        self.log_error("Failed to parse datetime fields", e, session_id=session_id)
-                        return None
-                    
-                    # 安全地解析元数据
-                    try:
-                        metadata = json.loads(session_data.get("metadata", "{}"))
-                    except (json.JSONDecodeError, TypeError):
-                        metadata = {}
-                    
-                    session = Session(
-                        session_id=session_data["session_id"],
-                        epub_path=session_data.get("epub_path", ""),
-                        upload_time=upload_time,
-                        last_accessed=last_accessed,
-                        expires_at=expires_at,
-                        original_filename=session_data.get("original_filename") or None,
-                        file_size=int(session_data.get("file_size", 0)) or None,
-                        extracted_path=session_data.get("extracted_path") or None,
-                        metadata=metadata
-                    )
-                    
-                    # 同步到内存
-                    self.sessions[session_id] = session
-                    return session
-                    
-            except Exception as e:
-                self.log_error("Failed to load session from Redis", e, session_id=session_id)
-        
-        return None
-    
-    async def _cleanup_expired_sessions(self):
-        """定期清理过期会话"""
-        while True:
-            try:
-                await asyncio.sleep(settings.cleanup_interval)
-                await self._cleanup_expired_sessions_sync()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                self.log_error("Error in session cleanup task", e)
-    
-    async def _cleanup_expired_sessions_sync(self):
-        """同步清理过期会话"""
-        now = datetime.now()
-        expired_sessions = []
-        
-        # 查找过期会话
-        for session_id, session in self.sessions.items():
-            if session and session.expires_at and session.expires_at < now:
-                expired_sessions.append(session_id)
-        
-        # 删除过期会话
-        for session_id in expired_sessions:
-            await self.delete_session(session_id)
-        
-        if expired_sessions:
-            self.log_info("Cleaned up expired sessions", count=len(expired_sessions))
-    
-    async def get_session_stats(self) -> Dict[str, Any]:
-        """获取会话统计信息
-        
-        Returns:
-            Dict[str, Any]: 统计信息
-        """
-        now = datetime.now()
-        active_sessions = 0
-        total_sessions = len(self.sessions)
-        
-        for session in self.sessions.values():
-            if session and session.expires_at and session.expires_at > now:
-                active_sessions += 1
-        
-        return {
-            "total_sessions": total_sessions,
-            "active_sessions": active_sessions,
-            "expired_sessions": total_sessions - active_sessions,
-            "max_sessions": settings.max_sessions,
-            "session_timeout": settings.session_timeout,
-            "cleanup_interval": settings.cleanup_interval,
-            "redis_enabled": self._redis_client is not None
-        }
+
     
     async def cleanup_expired_sessions(self) -> int:
-        """Public method to cleanup expired sessions.
+        """手动清理过期会话
+        基于last_accessed时间清理过期会话
         
         Returns:
-            int: Number of sessions cleaned up
+            int: 清理的会话数量
         """
-        now = datetime.now()
-        expired_sessions = []
+        try:
+            with self._lock:
+                cleaned_count = self._cleanup_expired_sessions_internal()
+                if cleaned_count > 0:
+                    self.log_info(f"Manual cleanup completed: {cleaned_count} sessions cleaned")
+                return cleaned_count
+                
+        except Exception as e:
+            self.log_error("Failed to cleanup expired sessions", e)
+            return 0
+    
+    def _cleanup_session_files(self, session_id: str):
+        """清理会话相关的文件
         
-        # 查找过期会话
-        for session_id, session in self.sessions.items():
-            if session and session.expires_at and session.expires_at < now:
-                expired_sessions.append(session_id)
+        Args:
+            session_id: 会话ID
+        """
+        try:
+            session_file = self._find_session_file(session_id)
+            if session_file and session_file.exists():
+                session_dir = session_file.parent
+                shutil.rmtree(session_dir)
+                self.log_info("Session files cleaned up", session_id=session_id)
+        except Exception as e:
+            self.log_error("Failed to cleanup session files", e, session_id=session_id)
+    
+    def get_session_dir(self, session_id: str, file_type: str = "unknown") -> str:
+        """获取会话目录路径
         
-        # 删除过期会话
-        for session_id in expired_sessions:
-            await self.delete_session(session_id)
+        Args:
+            session_id: 会话ID
+            file_type: 文件类型 (text, epub, unknown)
+            
+        Returns:
+            str: 会话目录路径
+        """
+        session_dir = self._get_session_dir_path(session_id, file_type)
+        return str(session_dir)
+    
+    async def get_session_directory(self, session_id: str) -> Optional[str]:
+        """获取会话目录路径（异步版本）
         
-        if expired_sessions:
-            self.log_info("Cleaned up expired sessions", count=len(expired_sessions))
+        Args:
+            session_id: 会话ID
+            
+        Returns:
+            Optional[str]: 会话目录路径，如果会话不存在则返回None
+        """
+        try:
+            session_file = self._find_session_file(session_id)
+            if session_file and session_file.exists():
+                return str(session_file.parent)
+            return None
+        except Exception as e:
+            self.log_error("Failed to get session directory", e, session_id=session_id)
+            return None
+    
+    async def cleanup_session_on_disconnect(self, session_id: str) -> bool:
+        """当用户断开连接时清理会话
         
-        return len(expired_sessions)
+        Args:
+            session_id: 会话ID
+            
+        Returns:
+            bool: 是否清理成功
+        """
+        try:
+            with self._lock:
+                session_file = self._find_session_file(session_id)
+                if not session_file or not session_file.exists():
+                    return False
+                
+                # 读取会话数据
+                with open(session_file, 'r', encoding='utf-8') as f:
+                    session_data = json.load(f)
+                
+                # 标记会话为已断开
+                session_data['status'] = 'disconnected'
+                session_data['disconnected_at'] = datetime.utcnow().isoformat()
+                
+                # 保存更新后的会话数据
+                with open(session_file, 'w', encoding='utf-8') as f:
+                    json.dump(session_data, f, ensure_ascii=False, indent=2, default=str)
+                
+                # 立即清理会话文件（可选，根据需求决定）
+                # 如果希望立即清理，取消下面的注释
+                # session_dir = session_file.parent
+                # if session_dir.exists():
+                #     shutil.rmtree(session_dir)
+                
+                self.log_info("Session marked as disconnected", session_id=session_id)
+                return True
+                
+        except Exception as e:
+            self.log_error("Failed to cleanup session on disconnect", e, session_id=session_id)
+            return False
+    
+    async def cleanup_disconnected_sessions(self, max_age_hours: int = 1) -> int:
+        """清理已断开连接的会话
+        
+        Args:
+            max_age_hours: 断开连接后多少小时清理，默认1小时
+            
+        Returns:
+            int: 清理的会话数量
+        """
+        try:
+            with self._lock:
+                now = datetime.utcnow()
+                cleaned_count = 0
+                
+                # 遍历所有会话目录
+                for file_type in ['epub', 'text']:
+                    type_dir = self.session_base_dir / file_type
+                    if not type_dir.exists():
+                        continue
+                    
+                    for session_dir in type_dir.iterdir():
+                        if not session_dir.is_dir():
+                            continue
+                        
+                        session_file = session_dir / "session.json"
+                        if not session_file.exists():
+                            continue
+                        
+                        try:
+                            # 读取会话数据
+                            with open(session_file, 'r', encoding='utf-8') as f:
+                                session_data = json.load(f)
+                            
+                            # 检查是否为已断开的会话
+                            if session_data.get('status') == 'disconnected':
+                                disconnected_at_str = session_data.get('disconnected_at')
+                                if disconnected_at_str:
+                                    disconnected_at = datetime.fromisoformat(disconnected_at_str)
+                                    hours_since_disconnect = (now - disconnected_at).total_seconds() / 3600
+                                    
+                                    if hours_since_disconnect > max_age_hours:
+                                        # 删除已断开的会话目录
+                                        shutil.rmtree(session_dir)
+                                        cleaned_count += 1
+                                        self.log_info(f"Disconnected session cleaned: {hours_since_disconnect:.1f}h > {max_age_hours}h", 
+                                                     session_id=session_dir.name)
+                        
+                        except Exception as e:
+                            self.log_error(f"Failed to process disconnected session {session_dir.name}", e)
+                            continue
+                
+                if cleaned_count > 0:
+                    self.log_info(f"Cleaned up {cleaned_count} disconnected sessions")
+                
+                return cleaned_count
+                
+        except Exception as e:
+            self.log_error("Failed to cleanup disconnected sessions", e)
+            return 0
 
 
-# 创建全局服务实例
+# 全局会话服务实例
 session_service = SessionService()
-
-
-# 导出
-__all__ = ["SessionService", "session_service"]

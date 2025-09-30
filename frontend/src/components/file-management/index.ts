@@ -1,7 +1,7 @@
 // File management components exports
 // Export all file management related components
 
-export { default as FileBrowser } from '../FileBrowser';
+// Note: FileBrowser has been removed as part of cleanup
 export { default as UploadModal } from '../UploadModal';
 
 // TODO: Export additional file management components when implemented

@@ -1,8 +1,7 @@
 import React, { useState, useRef, useCallback } from 'react';
-import { Typography, Modal, Input, message } from 'antd';
+import { Typography, Modal, Input, App } from 'antd';
 import { 
   FolderOutlined, 
-  FolderOpenOutlined,
   FileTextOutlined,
   FileImageOutlined,
   FileOutlined,
@@ -11,6 +10,7 @@ import {
 } from '@ant-design/icons';
 import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
+import useAppStore from '../store/useAppStore';
 
 const { Title } = Typography;
 
@@ -24,7 +24,7 @@ interface FileNode {
 interface FileBrowserProps {
   fileTree: FileNode[];
   selectedFile: string | null;
-  onFileSelect: (file: FileNode) => void;
+  onFileSelect: (file: FileNode) => Promise<void>;
   onFileRename?: (oldPath: string, newName: string) => void;
   onFileDelete?: (path: string) => void;
   onFileReorder?: (dragPath: string, hoverPath: string) => void;
@@ -86,7 +86,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({ visible, x, y, file, onRename
 interface DraggableFileItemProps {
   file: FileNode;
   isSelected: boolean;
-  onSelect: () => void;
+  onSelect: () => Promise<void>;
   onContextMenu: (e: React.MouseEvent, file: FileNode) => void;
   onDrop: (dragPath: string, hoverPath: string) => void;
   onOpenSearchReplace?: (filePath: string) => void;
@@ -227,14 +227,25 @@ const DraggableFileItem: React.FC<DraggableFileItemProps> = ({
             : 'inset 0 -1px 0 0 rgba(156, 163, 175, 0.3)'
         })
       }}
-      onClick={() => {
-        onSelect();
-        // Auto-open search replace for text files
-        if (file.type === 'file' && onOpenSearchReplace && 
-            (file.name.endsWith('.html') || file.name.endsWith('.xhtml') || file.name.endsWith('.css') || file.name.endsWith('.txt'))) {
-          setTimeout(() => {
-            onOpenSearchReplace(file.path);
-          }, 100);
+      onClick={async () => {
+        console.log('🔍 FileBrowser: File clicked:', file.name, file.path);
+        console.log('🔍 FileBrowser: File type:', file.type);
+        
+        try {
+          console.log('🔍 FileBrowser: Calling onSelect...');
+          await onSelect();
+          console.log('✅ FileBrowser: onSelect completed successfully');
+          
+          // Auto-open search replace for text files
+          if (file.type === 'file' && onOpenSearchReplace && 
+              (file.name.endsWith('.html') || file.name.endsWith('.xhtml') || file.name.endsWith('.css') || file.name.endsWith('.txt'))) {
+            console.log('🔍 FileBrowser: Auto-opening search replace for:', file.path);
+            setTimeout(() => {
+              onOpenSearchReplace(file.path);
+            }, 100);
+          }
+        } catch (error) {
+          console.error('❌ FileBrowser: Error in onSelect:', error);
         }
       }}
       onContextMenu={(e) => onContextMenu(e, file)}
@@ -267,6 +278,7 @@ const FileBrowser: React.FC<FileBrowserProps> = ({
   onOpenSearchReplace,
   isDarkMode = false
 }) => {
+  const { message } = App.useApp();
   const [contextMenu, setContextMenu] = useState<{
     visible: boolean;
     x: number;

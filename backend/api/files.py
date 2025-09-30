@@ -1,788 +1,253 @@
-"""文件操作API"""
+"""文件操作API路由"""
 
-import os
-from typing import Dict, Any, Optional, List
-from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
+import mimetypes
+from pathlib import Path
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import JSONResponse, Response
+from typing import Optional
 
-from backend.models.schemas import (
-    ApiResponse, ErrorResponse, ResponseStatus, ErrorCode,
-    FileContent, SaveFileRequest, ExportRequest, FileNode
-)
-from backend.services.epub_service import epub_service
-from backend.services.text_service import text_service
-from backend.services.session_service import session_service
-from backend.services.preview_service import preview_service
-from backend.core.config import settings
-from backend.core.security import security_validator
-from backend.core.logging import performance_logger, security_logger
+from services.file_service import file_service
+from services.session_service import session_service
+from core.logging import performance_logger
+from db.models.schemas import FileContentResponse, FileTreeResponse
 
-# 创建路由器
-router = APIRouter(prefix="/files", tags=["文件操作"])
-
-# 创建限流器
-limiter = Limiter(key_func=get_remote_address)
-
-# 添加限流异常处理
+router = APIRouter(prefix="/api/v1", tags=["files"])
 
 
-@router.get(
-    "/content",
-    response_model=ApiResponse[FileContent],
-    summary="获取文件内容",
-    description="获取指定文件的内容"
-)
-@limiter.limit("30/minute")
+@router.get("/file-tree/{session_id}", response_model=FileTreeResponse)
+async def get_file_tree(session_id: str):
+    """获取文件树结构"""
+    try:
+        result = await file_service.get_file_tree(session_id)
+        
+        performance_logger.info(
+            f"File tree retrieved",
+            extra={"session_id": session_id}
+        )
+        
+        return result
+        
+    except HTTPException:
+        # 让 HTTPException 直接传递，保持原有的状态码
+        raise
+    except Exception as e:
+        performance_logger.error(f"Get file tree failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取文件树失败")
+
+
+@router.get("/files/content", response_model=FileContentResponse)
 async def get_file_content(
-    request: Request,
-    session_id: str = Query(..., description="会话ID"),
-    file_path: str = Query(..., description="文件路径")
-) -> ApiResponse[FileContent]:
-    """获取文件内容
-    
-    Args:
-        request: FastAPI请求对象
-        session_id: 会话ID
-        file_path: 文件路径
-        
-    Returns:
-        ApiResponse[FileContent]: 文件内容响应
-    """
+    session_id: str = Query(...),
+    file_path: str = Query(...)
+):
+    """获取文件内容"""
     try:
-        # 验证会话
-        session_info = await session_service.get_session(session_id)
-        if not session_info:
-            raise HTTPException(
-                status_code=404,
-                detail=ErrorResponse(
-                    status=ResponseStatus.ERROR,
-                    error_code=ErrorCode.SESSION_NOT_FOUND,
-                    message="会话不存在",
-                    timestamp=performance_logger.get_current_time()
-                ).model_dump()
-            )
-        
-        # 验证文件路径
-        if not security_validator.validate_file_path(file_path):
-            raise HTTPException(
-                status_code=400,
-                detail=ErrorResponse(
-                    status=ResponseStatus.ERROR,
-                    error_code=ErrorCode.FILE_INVALID_PATH,
-                    message="文件路径无效",
-                    timestamp=performance_logger.get_current_time()
-                ).model_dump()
-            )
-        
-        async with performance_logger.async_timer("get_file_content"):
-            # 检查文件类型并获取内容
-            file_type = session_info.metadata.get("file_type", "epub")
-            
-            if file_type == "text":
-                # TEXT文件处理
-                from pathlib import Path
-                session_dir = session_info.metadata.get("session_dir")
-                if not session_dir:
-                    raise HTTPException(status_code=500, detail="会话目录不存在")
-                
-                full_file_path = Path(session_dir) / file_path
-                file_content = await text_service.read_text_file(full_file_path)
-            else:
-                # EPUB文件处理
-                file_content = await epub_service.get_file_content(session_id, file_path)
-            
-            return ApiResponse(
-                status=ResponseStatus.SUCCESS,
-                message="文件内容获取成功",
-                data=file_content
-            )
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        security_logger.log_error(
-            "Failed to get file content",
-            e,
+        result = await file_service.get_file_content(
             session_id=session_id,
             file_path=file_path
         )
         
-        raise HTTPException(
-            status_code=500,
-            detail=ErrorResponse(
-                status=ResponseStatus.ERROR,
-                error_code=ErrorCode.FILE_READ_FAILED,
-                message="获取文件内容失败",
-                details={"error": str(e)},
-                timestamp=performance_logger.get_current_time()
-            ).model_dump()
+        performance_logger.info(
+            f"File content retrieved",
+            extra={
+                "session_id": session_id,
+                "file_path": file_path
+            }
         )
-
-
-@router.post(
-    "/save",
-    response_model=ApiResponse[Dict[str, Any]],
-    summary="保存文件",
-    description="保存修改后的文件内容"
-)
-@limiter.limit("20/minute")
-async def save_file(
-    request: Request,
-    save_request: SaveFileRequest
-) -> ApiResponse[Dict[str, Any]]:
-    """保存文件
-    
-    Args:
-        request: FastAPI请求对象
-        save_request: 保存请求
         
-    Returns:
-        ApiResponse[Dict[str, Any]]: 保存结果
-    """
-    try:
-        # 验证会话
-        session_info = await session_service.get_session(save_request.session_id)
-        if not session_info:
-            raise HTTPException(
-                status_code=404,
-                detail=ErrorResponse(
-                    status=ResponseStatus.ERROR,
-                    error_code=ErrorCode.SESSION_NOT_FOUND,
-                    message="会话不存在",
-                    timestamp=performance_logger.get_current_time()
-                ).model_dump()
-            )
+        # 转换为FileContentResponse格式
+        return FileContentResponse(
+            success=True,
+            content=result.content,
+            encoding=result.encoding,
+            mime_type=result.mime_type,
+            size=result.size,
+            last_modified=result.last_modified,
+            is_binary=result.is_binary
+        )
         
-        # 验证文件路径
-        if not security_validator.validate_file_path(save_request.file_path):
-            raise HTTPException(
-                status_code=400,
-                detail=ErrorResponse(
-                    status=ResponseStatus.ERROR,
-                    error_code=ErrorCode.FILE_INVALID_PATH,
-                    message="文件路径无效",
-                    timestamp=performance_logger.get_current_time()
-                ).model_dump()
-            )
-        
-        async with performance_logger.async_timer("save_file"):
-            # 检查文件类型并保存
-            file_type = session_info.metadata.get("file_type", "epub")
-            
-            if file_type == "text":
-                # TEXT文件处理
-                from pathlib import Path
-                session_dir = session_info.metadata.get("session_dir")
-                if not session_dir:
-                    raise HTTPException(status_code=500, detail="会话目录不存在")
-                
-                full_file_path = Path(session_dir) / save_request.file_path
-                await text_service.write_text_file(
-                    full_file_path, 
-                    save_request.content, 
-                    save_request.encoding or 'utf-8'
-                )
-                
-                # 获取文件信息
-                file_stat = full_file_path.stat()
-                result = {
-                    "size": file_stat.st_size,
-                    "last_modified": file_stat.st_mtime
-                }
-            else:
-                # EPUB文件处理
-                result = await epub_service.save_file_content(
-                    session_id=save_request.session_id,
-                    file_path=save_request.file_path,
-                    content=save_request.content,
-                    encoding=save_request.encoding
-                )
-            
-            # 清理相关缓存
-            await preview_service.clear_preview_cache(save_request.session_id)
-            
-            # 记录操作
-            security_logger.log_info(
-                "File saved successfully",
-                session_id=save_request.session_id,
-                file_path=save_request.file_path,
-                content_length=len(save_request.content)
-            )
-            
-            return ApiResponse(
-                status=ResponseStatus.SUCCESS,
-                message="文件保存成功",
-                data={
-                    "file_path": save_request.file_path,
-                    "size": result.get("size", 0),
-                    "last_modified": result.get("last_modified"),
-                    "encoding": save_request.encoding
-                }
-            )
-            
     except HTTPException:
+        # 让 HTTPException 直接传递，保持原有的状态码
         raise
     except Exception as e:
-        security_logger.log_error(
-            "Failed to save file",
-            e,
-            session_id=save_request.session_id,
-            file_path=save_request.file_path
-        )
-        
-        raise HTTPException(
-            status_code=500,
-            detail=ErrorResponse(
-                status=ResponseStatus.ERROR,
-                error_code=ErrorCode.FILE_SAVE_FAILED,
-                message="文件保存失败",
-                details={"error": str(e)},
-                timestamp=performance_logger.get_current_time()
-            ).model_dump()
-        )
+        performance_logger.error(f"Get file content failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取文件内容失败")
 
 
-@router.get(
-    "/tree",
-    response_model=ApiResponse[List[FileNode]],
-    summary="获取文件树",
-    description="获取EPUB文件的目录结构"
-)
-@limiter.limit("20/minute")
-async def get_file_tree(
-    request: Request,
-    session_id: str = Query(..., description="会话ID")
-) -> ApiResponse[List[FileNode]]:
-    """获取文件树
-    
-    Args:
-        request: FastAPI请求对象
-        session_id: 会话ID
-        
-    Returns:
-        ApiResponse[FileNode]: 文件树响应
-    """
-    try:
-        # 验证会话
-        session_info = await session_service.get_session(session_id)
-        if not session_info:
-            raise HTTPException(
-                status_code=404,
-                detail=ErrorResponse(
-                    status=ResponseStatus.ERROR,
-                    error_code=ErrorCode.SESSION_NOT_FOUND,
-                    message="会话不存在",
-                    timestamp=performance_logger.get_current_time()
-                ).model_dump()
-            )
-        
-        async with performance_logger.async_timer("get_file_tree"):
-            # 获取文件树
-            file_tree = await epub_service.get_file_tree(session_id)
-            
-            return ApiResponse(
-                status=ResponseStatus.SUCCESS,
-                message="文件树获取成功",
-                data=file_tree
-            )
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        security_logger.log_error(
-            "Failed to get file tree",
-            e,
-            session_id=session_id
-        )
-        
-        raise HTTPException(
-            status_code=500,
-            detail=ErrorResponse(
-                status=ResponseStatus.ERROR,
-                error_code=ErrorCode.GENERAL_ERROR,
-                message="获取文件树失败",
-                details={"error": str(e)},
-                timestamp=performance_logger.get_current_time()
-            ).model_dump()
-        )
-
-
-@router.post(
-    "/export",
-    summary="导出EPUB",
-    description="导出编辑后的EPUB文件"
-)
-@limiter.limit("5/minute")
-async def export_epub(
-    request: Request,
-    export_request: ExportRequest
+@router.get("/files/binary")
+async def get_binary_file(
+    session_id: str = Query(...),
+    file_path: str = Query(...)
 ):
-    """导出EPUB文件
-    
-    Args:
-        request: FastAPI请求对象
-        export_request: 导出请求
-        
-    Returns:
-        StreamingResponse: EPUB文件流
-    """
+    """获取二进制文件内容（图片、字体等）"""
     try:
-        # 验证会话
-        session_info = await session_service.get_session(export_request.session_id)
-        if not session_info:
-            raise HTTPException(
-                status_code=404,
-                detail=ErrorResponse(
-                    status=ResponseStatus.ERROR,
-                    error_code=ErrorCode.SESSION_NOT_FOUND,
-                    message="会话不存在",
-                    timestamp=performance_logger.get_current_time()
-                ).model_dump()
-            )
+        # 获取会话信息
+        session = await session_service.get_session(session_id)
+        if not session:
+            performance_logger.error(f"Session not found: {session_id}")
+            raise HTTPException(status_code=404, detail="会话不存在")
         
-        async with performance_logger.async_timer("export_epub"):
-            # 导出EPUB文件
-            epub_stream = await epub_service.export_epub(
-                session_id=export_request.session_id,
-                output_filename=export_request.output_filename
-            )
-            
-            # 生成文件名
-            filename = export_request.output_filename or f"edited_{session_info.metadata.get('original_filename', 'book.epub')}"
-            if not filename.endswith('.epub'):
-                filename += '.epub'
-            
-            # 记录导出操作
-            security_logger.log_info(
-                "EPUB exported successfully",
-                session_id=export_request.session_id,
-                filename=filename
-            )
-            
-            return StreamingResponse(
-                epub_stream,
-                media_type="application/epub+zip",
-                headers={
-                    "Content-Disposition": f"attachment; filename={filename}",
-                    "Cache-Control": "no-cache"
-                }
-            )
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        security_logger.log_error(
-            "Failed to export EPUB",
-            e,
-            session_id=export_request.session_id
-        )
+        performance_logger.info(f"Binary file request - session_id: {session_id}, file_path: {file_path}, session: {session}")
         
-        raise HTTPException(
-            status_code=500,
-            detail=ErrorResponse(
-                status=ResponseStatus.ERROR,
-                error_code=ErrorCode.EPUB_EXPORT_FAILED,
-                message="EPUB导出失败",
-                details={"error": str(e)},
-                timestamp=performance_logger.get_current_time()
-            ).model_dump()
-        )
-
-
-@router.post(
-    "/export/text",
-    summary="导出TEXT文件",
-    description="导出编辑后的TEXT文件"
-)
-@limiter.limit("5/minute")
-async def export_text(
-    request: Request,
-    export_request: ExportRequest
-):
-    """导出TEXT文件
-    
-    Args:
-        request: FastAPI请求对象
-        export_request: 导出请求
+        # 构建完整文件路径
+        if session.get('extracted_path'):
+            # EPUB文件
+            base_dir = Path(session['extracted_path'])
+            if (base_dir / 'epub').exists():
+                base_dir = base_dir / 'epub'
+            performance_logger.info(f"Using EPUB base directory: {base_dir}")
+        else:
+            # 文本文件
+            base_dir = Path("backend/sessions") / session_id
+            performance_logger.info(f"Using text file base directory: {base_dir}")
         
-    Returns:
-        StreamingResponse: TEXT文件流
-    """
-    try:
-        # 验证会话
-        session_info = await session_service.get_session(export_request.session_id)
-        if not session_info:
-            raise HTTPException(
-                status_code=404,
-                detail=ErrorResponse(
-                    status=ResponseStatus.ERROR,
-                    error_code=ErrorCode.SESSION_NOT_FOUND,
-                    message="会话不存在",
-                    timestamp=performance_logger.get_current_time()
-                ).model_dump()
-            )
+        # 安全处理文件路径，防止路径遍历攻击
+        clean_path = file_path
+        original_path = clean_path
         
-        # 验证是TEXT文件类型
-        file_type = session_info.metadata.get("file_type", "epub")
-        if file_type != "text":
-            raise HTTPException(
-                status_code=400,
-                detail="只能导出TEXT文件类型的会话"
-            )
+        # 处理各种相对路径格式
+        while clean_path.startswith('../'):
+            clean_path = clean_path[3:]  # 移除 '../'
         
-        async with performance_logger.async_timer("export_text"):
-            # 获取会话目录和文件信息
-            session_dir = session_info.metadata.get("session_dir")
-            if not session_dir:
-                raise HTTPException(status_code=500, detail="会话目录不存在")
-            
-            # 获取原始文件名
-            original_filename = session_info.metadata.get("original_filename", "text_file.txt")
-            
-            # 生成导出文件名
-            filename = export_request.output_filename or f"edited_{original_filename}"
-            if not any(filename.lower().endswith(ext) for ext in ['.txt', '.text', '.md', '.markdown']):
-                filename += '.txt'
-            
-            # 读取文件内容
-            from pathlib import Path
-            file_path = Path(session_dir) / original_filename
-            
-            if not file_path.exists():
-                raise HTTPException(status_code=404, detail="文件不存在")
-            
-            file_content = await text_service.read_text_file(file_path)
-            
-            # 创建文件流
-            def generate_content():
-                yield file_content.content.encode(file_content.encoding)
-            
-            # 记录导出操作
-            security_logger.log_info(
-                "TEXT file exported successfully",
-                session_id=export_request.session_id,
-                filename=filename
-            )
-            
-            return StreamingResponse(
-                generate_content(),
-                media_type="text/plain",
-                headers={
-                    "Content-Disposition": f"attachment; filename={filename}",
-                    "Cache-Control": "no-cache",
-                    "Content-Type": f"text/plain; charset={file_content.encoding}"
-                }
-            )
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        security_logger.log_error(
-            "Failed to export TEXT file",
-            e,
-            session_id=export_request.session_id
-        )
+        if clean_path.startswith('./'):
+            clean_path = clean_path[2:]  # 移除 './'
         
-        raise HTTPException(
-            status_code=500,
-            detail=ErrorResponse(
-                status=ResponseStatus.ERROR,
-                error_code=ErrorCode.GENERAL_ERROR,
-                message="TEXT文件导出失败",
-                details={"error": str(e)},
-                timestamp=performance_logger.get_current_time()
-            ).model_dump()
-        )
-
-
-@router.get(
-    "/preview/{session_id}/{file_path:path}",
-    summary="预览文件",
-    description="获取文件的HTML预览"
-)
-@limiter.limit("30/minute")
-async def preview_file(
-    request: Request,
-    session_id: str,
-    file_path: str,
-    base_url: Optional[str] = Query(None, description="基础URL")
-):
-    """预览文件
-    
-    Args:
-        request: FastAPI请求对象
-        session_id: 会话ID
-        file_path: 文件路径
-        base_url: 基础URL
+        if clean_path.startswith('/'):
+            clean_path = clean_path[1:]  # 移除开头的 '/'
         
-    Returns:
-        StreamingResponse: HTML预览
-    """
-    try:
-        # 验证会话
-        session_info = await session_service.get_session(session_id)
-        if not session_info:
-            raise HTTPException(
-                status_code=404,
-                detail="会话不存在"
-            )
+        performance_logger.info(f"Path processing - original: {original_path}, cleaned: {clean_path}")
         
-        # 验证文件路径
-        if not security_validator.validate_file_path(file_path):
-            raise HTTPException(
-                status_code=400,
-                detail="文件路径无效"
-            )
+        # 确保路径不包含危险字符（但允许正常的相对路径）
+        if '..' in clean_path.replace('../', '').replace('./', '') or clean_path.startswith('/'):
+            performance_logger.warning(f"Invalid file path detected: {clean_path}")
+            raise HTTPException(status_code=400, detail="无效的文件路径")
         
-        async with performance_logger.async_timer("preview_file"):
-            # 生成预览
-            preview_html = await preview_service.generate_preview(
-                session_id=session_id,
-                file_path=file_path,
-                base_url=base_url
-            )
-            
-            return StreamingResponse(
-                iter([preview_html.encode('utf-8')]),
-                media_type="text/html",
-                headers={
-                    "Cache-Control": "public, max-age=300",  # 缓存5分钟
-                    "Content-Type": "text/html; charset=utf-8"
-                }
-            )
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        security_logger.log_error(
-            "Failed to preview file",
-            e,
-            session_id=session_id,
-            file_path=file_path
-        )
+        # 尝试多种路径组合
+        possible_paths = [
+            base_dir / clean_path,
+            base_dir / Path(clean_path).name,  # 只使用文件名
+        ]
         
-        # 返回错误页面
-        error_html = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <title>预览错误</title>
-    <meta charset="utf-8">
-</head>
-<body>
-    <h1>预览错误</h1>
-    <p>无法预览文件: {file_path}</p>
-    <p>错误信息: {str(e)}</p>
-</body>
-</html>
-        """
+        # 如果原始路径包含相对路径，也尝试直接使用
+        if '../' in original_path or './' in original_path:
+            try:
+                # 尝试相对于base_dir解析路径
+                relative_path = Path(original_path)
+                if not relative_path.is_absolute():
+                    possible_paths.append(base_dir / relative_path)
+            except Exception as e:
+                performance_logger.warning(f"Failed to process relative path {original_path}: {e}")
         
-        return StreamingResponse(
-            iter([error_html.encode('utf-8')]),
-            media_type="text/html",
-            status_code=500
-        )
-
-
-@router.put(
-    "/content",
-    response_model=ApiResponse[Dict[str, Any]],
-    summary="更新文件内容",
-    description="更新指定文件的内容"
-)
-@limiter.limit("20/minute")
-async def update_file_content(
-    request: Request,
-    save_request: SaveFileRequest
-) -> ApiResponse[Dict[str, Any]]:
-    """更新文件内容
-    
-    Args:
-        request: FastAPI请求对象
-        save_request: 保存请求
+        found_file = None
         
-    Returns:
-        ApiResponse[Dict[str, Any]]: 更新结果
-    """
-    # 复用save_file的逻辑
-    return await save_file(request, save_request)
-
-
-@router.delete(
-    "/content",
-    response_model=ApiResponse[Dict[str, Any]],
-    summary="删除文件",
-    description="删除指定文件"
-)
-@limiter.limit("10/minute")
-async def delete_file(
-    request: Request,
-    session_id: str = Query(..., description="会话ID"),
-    file_path: str = Query(..., description="文件路径")
-) -> ApiResponse[Dict[str, Any]]:
-    """删除文件
-    
-    Args:
-        request: FastAPI请求对象
-        session_id: 会话ID
-        file_path: 文件路径
-        
-    Returns:
-        ApiResponse[Dict[str, Any]]: 删除结果
-    """
-    try:
-        # 验证会话
-        session_info = await session_service.get_session(session_id)
-        if not session_info:
-            raise HTTPException(
-                status_code=404,
-                detail=ErrorResponse(
-                    status=ResponseStatus.ERROR,
-                    error_code=ErrorCode.SESSION_NOT_FOUND,
-                    message="会话不存在",
-                    timestamp=performance_logger.get_current_time()
-                ).model_dump()
-            )
-        
-        # 验证文件路径
-        if not security_validator.validate_file_path(file_path):
-            raise HTTPException(
-                status_code=400,
-                detail=ErrorResponse(
-                    status=ResponseStatus.ERROR,
-                    error_code=ErrorCode.FILE_INVALID_PATH,
-                    message="文件路径无效",
-                    timestamp=performance_logger.get_current_time()
-                ).model_dump()
-            )
-        
-        async with performance_logger.async_timer("delete_file"):
-            # 检查文件类型并删除
-            file_type = session_info.metadata.get("file_type", "epub")
-            
-            if file_type == "text":
-                # TEXT文件处理
-                from pathlib import Path
-                session_dir = session_info.metadata.get("session_dir")
-                if not session_dir:
-                    raise HTTPException(status_code=500, detail="会话目录不存在")
+        # 首先尝试直接路径匹配
+        for path_candidate in possible_paths:
+            try:
+                resolved_path = path_candidate.resolve()
+                base_resolved = base_dir.resolve()
                 
-                full_file_path = Path(session_dir) / file_path
-                if not full_file_path.exists():
-                    raise HTTPException(
-                        status_code=404,
-                        detail=ErrorResponse(
-                            status=ResponseStatus.ERROR,
-                            error_code=ErrorCode.FILE_NOT_FOUND,
-                            message="文件不存在",
-                            timestamp=performance_logger.get_current_time()
-                        ).model_dump()
-                    )
-                
-                full_file_path.unlink()
-                result = {"deleted": True, "file_path": file_path}
-            else:
-                # EPUB文件处理 - 暂时返回成功但不实际删除
-                # 因为EPUB文件结构复杂，删除可能破坏文件完整性
-                result = {"deleted": False, "message": "EPUB文件删除暂不支持"}
+                # 安全检查：确保文件在基础目录内
+                if str(resolved_path).startswith(str(base_resolved)) and resolved_path.exists() and resolved_path.is_file():
+                    found_file = resolved_path
+                    performance_logger.info(f"Direct path match found: {resolved_path}")
+                    break
+            except Exception as e:
+                performance_logger.debug(f"Path resolution failed for {path_candidate}: {e}")
+                continue
+        
+        # 如果直接路径不存在，尝试递归查找文件
+        if not found_file:
+            filename = Path(clean_path).name
+            performance_logger.info(f"Starting recursive search for filename: {filename} in {base_dir}")
             
-            return ApiResponse(
-                status=ResponseStatus.SUCCESS,
-                message="文件删除操作完成",
-                data=result
-            )
+            # 在base_dir中递归查找同名文件
+            try:
+                for file_candidate in base_dir.rglob(filename):
+                    if file_candidate.is_file():
+                        # 确保找到的文件仍在安全目录内
+                        try:
+                            resolved_candidate = file_candidate.resolve()
+                            base_resolved = base_dir.resolve()
+                            if str(resolved_candidate).startswith(str(base_resolved)):
+                                found_file = resolved_candidate
+                                performance_logger.info(f"Recursive search found: {resolved_candidate}")
+                                break
+                        except Exception as e:
+                            performance_logger.debug(f"File candidate resolution failed: {e}")
+                            continue
+            except Exception as e:
+                performance_logger.error(f"Recursive search failed: {e}")
+        
+        if not found_file:
+            # 列出base_dir的内容以便调试
+            try:
+                dir_contents = list(base_dir.rglob('*'))[:20]  # 限制输出数量
+                performance_logger.warning(f"File not found. Base dir contents (first 20): {[str(p) for p in dir_contents]}")
+            except Exception:
+                performance_logger.warning(f"File not found and failed to list directory contents")
             
+            performance_logger.error(f"Binary file not found - session_id: {session_id}, original_path: {original_path}, cleaned_path: {clean_path}, base_dir: {base_dir}")
+            raise HTTPException(status_code=404, detail=f"文件不存在: {file_path}")
+        
+        full_path = found_file
+        
+        # 读取二进制文件
+        try:
+            with open(full_path, 'rb') as f:
+                content = f.read()
+        except Exception as e:
+            performance_logger.error(f"Failed to read binary file {full_path}: {e}")
+            raise HTTPException(status_code=500, detail="文件读取失败")
+        
+        # 获取MIME类型
+        mime_type, _ = mimetypes.guess_type(str(full_path))
+        if not mime_type:
+            # 根据扩展名推断
+            extension = full_path.suffix.lower()
+            extension_map = {
+                '.jpg': 'image/jpeg',
+                '.jpeg': 'image/jpeg',
+                '.png': 'image/png',
+                '.gif': 'image/gif',
+                '.svg': 'image/svg+xml',
+                '.webp': 'image/webp',
+                '.bmp': 'image/bmp',
+                '.ico': 'image/x-icon',
+                '.tiff': 'image/tiff',
+                '.tif': 'image/tiff',
+                '.woff': 'font/woff',
+                '.woff2': 'font/woff2',
+                '.ttf': 'font/ttf',
+                '.otf': 'font/otf',
+                '.eot': 'application/vnd.ms-fontobject'
+            }
+            mime_type = extension_map.get(extension, 'application/octet-stream')
+        
+        performance_logger.info(
+            f"Binary file served successfully",
+            extra={
+                "session_id": session_id,
+                "original_path": file_path,
+                "resolved_path": str(full_path),
+                "mime_type": mime_type,
+                "size": len(content)
+            }
+        )
+        
+        return Response(
+            content=content,
+            media_type=mime_type,
+            headers={
+                "Cache-Control": "public, max-age=3600",
+                "Content-Length": str(len(content)),
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET",
+                "Access-Control-Allow-Headers": "*"
+            }
+        )
+        
     except HTTPException:
         raise
     except Exception as e:
-        security_logger.log_error(
-            "Failed to delete file",
-            e,
-            session_id=session_id,
-            file_path=file_path
-        )
-        
-        raise HTTPException(
-            status_code=500,
-            detail=ErrorResponse(
-                status=ResponseStatus.ERROR,
-                error_code=ErrorCode.FILE_DELETE_FAILED,
-                message="文件删除失败",
-                details={"error": str(e)},
-                timestamp=performance_logger.get_current_time()
-            ).model_dump()
-        )
-
-
-@router.delete(
-    "/cache/{session_id}",
-    response_model=ApiResponse[Dict[str, Any]],
-    summary="清理缓存",
-    description="清理指定会话的文件缓存"
-)
-async def clear_file_cache(
-    session_id: str
-) -> ApiResponse[Dict[str, Any]]:
-    """清理文件缓存
-    
-    Args:
-        session_id: 会话ID
-        
-    Returns:
-        ApiResponse[Dict[str, Any]]: 清理结果
-    """
-    try:
-        # 验证会话
-        session_info = await session_service.get_session(session_id)
-        if not session_info:
-            raise HTTPException(
-                status_code=404,
-                detail=ErrorResponse(
-                    status=ResponseStatus.ERROR,
-                    error_code=ErrorCode.SESSION_NOT_FOUND,
-                    message="会话不存在",
-                    timestamp=performance_logger.get_current_time()
-                ).model_dump()
-            )
-        
-        # 清理各种缓存
-        await preview_service.clear_preview_cache(session_id)
-        await epub_service.clear_file_cache(session_id)
-        
-        security_logger.log_info(
-            "File cache cleared",
-            session_id=session_id
-        )
-        
-        return ApiResponse(
-            status=ResponseStatus.SUCCESS,
-            message="缓存清理成功",
-            data={"session_id": session_id}
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        security_logger.log_error(
-            "Failed to clear file cache",
-            e,
-            session_id=session_id
-        )
-        
-        raise HTTPException(
-            status_code=500,
-            detail=ErrorResponse(
-                status=ResponseStatus.ERROR,
-                error_code=ErrorCode.GENERAL_ERROR,
-                message="清理缓存失败",
-                details={"error": str(e)},
-                timestamp=performance_logger.get_current_time()
-            ).model_dump()
-        )
-
-
-# 导出路由器
-__all__ = ["router"]
+        performance_logger.error(f"Get binary file failed - session_id: {session_id}, file_path: {file_path}, error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"获取二进制文件失败: {str(e)}")

@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useAppStore } from '../store';
-import { SearchReplaceService } from '../services/searchReplace';
+import { searchReplaceService } from '../services/searchReplace';
 import { useDebounce } from './useDebounce';
 import type { SearchOptions, SearchResult, ReplaceRule } from '../types';
 
@@ -21,8 +21,8 @@ export interface UseSearchReplaceReturn {
   
   // Batch replace functionality
   addReplaceRule: (rule: Omit<ReplaceRule, 'id'>) => void;
-  updateReplaceRule: (id: string, updates: Partial<ReplaceRule>) => void;
-  removeReplaceRule: (id: string) => void;
+  updateReplaceRule: (index: number, updates: Partial<ReplaceRule>) => void;
+  removeReplaceRule: (index: number) => void;
   executeBatchReplace: () => Promise<void>;
   
   // State
@@ -44,7 +44,7 @@ export function useSearchReplace(
   autoSearch: boolean = true,
   debounceMs: number = 300
 ): UseSearchReplaceReturn {
-  const searchService = useRef(new SearchReplaceService());
+  const searchService = useRef(searchReplaceService);
   
   // Get store state and actions
   const {
@@ -100,27 +100,21 @@ export function useSearchReplace(
       
       const mockResults: SearchResult[] = [
         {
-          id: '1',
-          filePath: '/OEBPS/chapter1.xhtml',
-          fileName: 'chapter1.xhtml',
-          line: 10,
-          column: 5,
-          match: query,
-          context: `This is some context with ${query} in it`,
-          startOffset: 25,
-          endOffset: 25 + query.length,
+          file_path: 'chapter1.html',
+          line_number: 10,
+          line_content: 'This is a sample text with search term.',
+          match_start: 25,
+          match_end: 36,
+          match_text: 'search term'
         },
         {
-          id: '2',
-          filePath: '/OEBPS/chapter2.xhtml',
-          fileName: 'chapter2.xhtml',
-          line: 15,
-          column: 12,
-          match: query,
-          context: `Another context containing ${query} here`,
-          startOffset: 28,
-          endOffset: 28 + query.length,
-        },
+          file_path: 'chapter2.html',
+          line_number: 5,
+          line_content: 'Another line containing the search term here.',
+          match_start: 32,
+          match_end: 43,
+          match_text: 'search term'
+        }
       ];
       
       setSearchResults(mockResults);
@@ -200,7 +194,7 @@ export function useSearchReplace(
         setCurrentResultIndex(updatedResults.length - 1);
       }
       
-      console.log(`Replaced "${result.match}" with "${replacement}" in ${result.fileName}`);
+      console.log(`Replaced "${result.match_text}" with "${replacement}" in ${result.file_path}`);
     } catch (error) {
       console.error('Replace failed:', error);
     } finally {
@@ -245,7 +239,7 @@ export function useSearchReplace(
       await new Promise(resolve => setTimeout(resolve, 300));
       
       // Remove results from this file
-      const updatedResults = searchResults.filter(result => result.filePath !== filePath);
+      const updatedResults = searchResults.filter(result => result.file_path !== filePath);
       setSearchResults(updatedResults);
       
       if (updatedResults.length === 0) {
@@ -266,19 +260,18 @@ export function useSearchReplace(
   const addReplaceRule = useCallback((rule: Omit<ReplaceRule, 'id'>) => {
     const newRule: ReplaceRule = {
       ...rule,
-      id: `rule-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     };
     addRule(newRule);
   }, [addRule]);
 
   // Update replace rule
-  const updateReplaceRule = useCallback((id: string, updates: Partial<ReplaceRule>) => {
-    updateRule(id, updates);
+  const updateReplaceRule = useCallback((index: number, updates: Partial<ReplaceRule>) => {
+    updateRule(index, updates);
   }, [updateRule]);
 
   // Remove replace rule
-  const removeReplaceRule = useCallback((id: string) => {
-    removeRule(id);
+  const removeReplaceRule = useCallback((index: number) => {
+    removeRule(index);
   }, [removeRule]);
 
   // Execute batch replace

@@ -1,21 +1,18 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import { Typography, Empty, Button, Space, Dropdown, MenuProps } from 'antd';
 import { EyeOutlined, ReloadOutlined, ExpandOutlined } from '@ant-design/icons';
-import { useTheme } from '../hooks/useTheme';
 
 const { Title } = Typography;
 
 interface PreviewPanelProps {
   content: string;
   fileName: string | null;
-  filePath?: string;
   isDarkMode?: boolean;
 }
 
 const PreviewPanel: React.FC<PreviewPanelProps> = ({ 
   content, 
   fileName, 
-  filePath,
   isDarkMode = false
 }) => {
   const [refreshKey, setRefreshKey] = React.useState(0);

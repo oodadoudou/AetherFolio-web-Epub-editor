@@ -3,6 +3,7 @@ import { Editor } from '@monaco-editor/react';
 import { Typography, Empty, Button, Space } from 'antd';
 import { FileTextOutlined, SearchOutlined } from '@ant-design/icons';
 import * as monaco from 'monaco-editor';
+import '../utils/monacoLoader'; // 导入Monaco loader配置
 
 const { Title } = Typography;
 

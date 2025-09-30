@@ -108,19 +108,7 @@ class BookMetadata(BaseModel):
     rights: Optional[str] = Field(None, description="版权信息")
 
 
-class SessionInfo(BaseModel):
-    """会话信息模型"""
-    session_id: str = Field(..., description="会话ID")
-    file_tree: List[FileNode] = Field(..., description="文件树")
-    metadata: BookMetadata = Field(..., description="书籍元数据")
-    created_time: datetime = Field(..., description="创建时间")
-    last_accessed: datetime = Field(..., description="最后访问时间")
-    original_filename: Optional[str] = Field(None, description="原始文件名")
-
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+# SessionInfo 模型已移至 db.models.schemas 中，避免重复定义
 
 
 class FileContent(BaseModel):

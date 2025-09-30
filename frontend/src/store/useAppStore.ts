@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { fileService } from '../services/file';
 
 interface FileNode {
   name: string;
@@ -18,10 +19,14 @@ interface AppState {
   isUploadModalVisible: boolean;
   uploadProgress: number;
   
+  // Session management
+  sessionId: string | null;
+  
   // File management
   fileTree: FileNode[];
   currentFile: CurrentFile | null;
   selectedFilePath: string | null;
+  modifiedFiles: Map<string, string>; // path -> content mapping for modified files
   
   // Metadata
   metadata: {
@@ -38,16 +43,20 @@ interface AppState {
   // Actions
   setUploadModalVisible: (visible: boolean) => void;
   setUploadProgress: (progress: number) => void;
+  setSessionId: (sessionId: string | null) => void;
   setFileTree: (tree: FileNode[]) => void;
   setCurrentFile: (file: CurrentFile | null) => void;
   setSelectedFilePath: (path: string | null) => void;
-  updateFileContent: (content: string) => void;
+  updateFileContent: (path: string, content: string) => void;
+  markFileAsModified: (path: string) => void;
+  getModifiedFiles: () => Map<string, string>;
+  clearModifiedFiles: () => void;
   setMetadata: (metadata: { title: string; author: string }) => void;
   setBatchReplaceVisible: (visible: boolean) => void;
   toggleTheme: () => void;
   
   // File operations
-  selectFile: (file: FileNode) => void;
+  selectFile: (file: FileNode) => Promise<void>;
   renameFile: (oldPath: string, newName: string) => void;
   deleteFile: (path: string) => void;
   reorderFiles: (dragPath: string, hoverPath: string) => void;
@@ -58,9 +67,11 @@ const useAppStore = create<AppState>((set, get) => ({
   // Initial state
   isUploadModalVisible: false,
   uploadProgress: 0,
+  sessionId: null,
   fileTree: [],
   currentFile: null,
   selectedFilePath: null,
+  modifiedFiles: new Map(),
   metadata: {
     title: '',
     author: ''
@@ -73,18 +84,15 @@ const useAppStore = create<AppState>((set, get) => ({
   
   setUploadProgress: (progress) => set({ uploadProgress: progress }),
   
+  setSessionId: (sessionId) => set({ sessionId }),
+  
   setFileTree: (tree) => set({ fileTree: tree }),
   
   setCurrentFile: (file) => set({ currentFile: file }),
   
   setSelectedFilePath: (path) => set({ selectedFilePath: path }),
   
-  updateFileContent: (content) => {
-    const { currentFile } = get();
-    if (currentFile) {
-      set({ currentFile: { ...currentFile, content } });
-    }
-  },
+
   
   setMetadata: (metadata) => set({ metadata }),
   
@@ -92,13 +100,32 @@ const useAppStore = create<AppState>((set, get) => ({
   
   toggleTheme: () => set((state) => ({ isDarkMode: !state.isDarkMode })),
   
-  selectFile: (file) => {
-    if (file.type === 'file') {
-      // Determine language based on file extension
-      const ext = file.name.toLowerCase().split('.').pop();
-      let language = 'plaintext';
-      
-      switch (ext) {
+  selectFile: async (file) => {
+    console.log('🔍 useAppStore: selectFile called with:', file);
+    const { sessionId } = get();
+    
+    console.log('🔍 useAppStore: Current sessionId:', sessionId);
+    
+    if (!sessionId) {
+      console.error('❌ useAppStore: No session ID available');
+      return;
+    }
+    
+    if (file.type === 'directory') {
+      console.log('🔍 useAppStore: Skipping directory selection:', file.name);
+      return; // Don't select directories
+    }
+    
+    console.log('🔍 useAppStore: Processing file selection for:', file.name);
+    
+    // Determine file language based on extension
+    const extension = file.name.split('.').pop()?.toLowerCase();
+    let language = 'plaintext';
+    
+    console.log('🔍 useAppStore: File extension:', extension);
+    
+    if (extension) {
+      switch (extension) {
         case 'html':
         case 'xhtml':
           language = 'html';
@@ -122,17 +149,51 @@ const useAppStore = create<AppState>((set, get) => ({
           language = 'plaintext';
       }
       
-      // Mock file content - in real app, this would fetch from server
-      const mockContent = getMockFileContent(file.name, language);
+      console.log('🔍 useAppStore: Determined language:', language);
       
-      set({
-        currentFile: {
+      // Set selected file path immediately for UI feedback
+      console.log('🔍 useAppStore: Setting selectedFilePath to:', file.path);
+      set({ selectedFilePath: file.path });
+      
+      try {
+        console.log('🔍 useAppStore: Fetching file content from server...');
+        // Fetch real file content from server
+        const fileContent = await fileService.getFileContent(sessionId, file.path);
+        
+        console.log('✅ useAppStore: File content fetched successfully:', {
           path: file.path,
-          content: mockContent,
-          language
-        },
-        selectedFilePath: file.path
-      });
+          contentLength: fileContent.content?.length || 0,
+          contentPreview: fileContent.content?.substring(0, 100) || 'No content'
+        });
+        
+        set({
+          currentFile: {
+            path: file.path,
+            content: fileContent.content,
+            language
+          },
+          selectedFilePath: file.path
+        });
+        
+        console.log('✅ useAppStore: File selection completed successfully');
+      } catch (error) {
+        console.error('❌ useAppStore: Failed to load file content:', error);
+        console.error('❌ useAppStore: Error details:', {
+          message: error.message,
+          stack: error.stack,
+          sessionId,
+          filePath: file.path
+        });
+        
+        // Show error to user instead of fallback to mock content
+        alert(`无法加载文件内容: ${error.message || '未知错误'}\n\n请检查:\n1. 网络连接是否正常\n2. 后端服务是否运行\n3. 会话是否有效`);
+        
+        // Clear current file on error
+        set({
+          currentFile: null,
+          selectedFilePath: null
+        });
+      }
     }
   },
 
@@ -291,119 +352,58 @@ const useAppStore = create<AppState>((set, get) => ({
       fileTree: [],
       currentFile: null,
       selectedFilePath: null,
+      modifiedFiles: new Map(),
+      sessionId: null,
       metadata: { title: '', author: '' },
       isUploadModalVisible: false,
       uploadProgress: 0,
       isBatchReplaceVisible: false
     });
     localStorage.removeItem('aetherfolio_file_order');
+  },
+
+  // 文件内容更新方法
+  updateFileContent: (path, content) => {
+    const { currentFile, modifiedFiles } = get();
+    
+    // 更新当前文件内容
+    if (currentFile && currentFile.path === path) {
+      set({
+        currentFile: {
+          ...currentFile,
+          content
+        }
+      });
+    }
+    
+    // 标记文件为已修改
+    const newModifiedFiles = new Map(modifiedFiles);
+    newModifiedFiles.set(path, content);
+    set({ modifiedFiles: newModifiedFiles });
+  },
+
+  // 标记文件为已修改
+  markFileAsModified: (path) => {
+    const { modifiedFiles, currentFile } = get();
+    const newModifiedFiles = new Map(modifiedFiles);
+    
+    // 使用当前文件内容或空字符串
+    const content = (currentFile && currentFile.path === path) ? currentFile.content : '';
+    newModifiedFiles.set(path, content);
+    set({ modifiedFiles: newModifiedFiles });
+  },
+
+  // 获取已修改的文件
+  getModifiedFiles: () => {
+    return get().modifiedFiles;
+  },
+
+  // 清除已修改的文件标记
+  clearModifiedFiles: () => {
+    set({ modifiedFiles: new Map() });
   }
 }));
 
-// Mock file content generator
-function getMockFileContent(fileName: string, language: string): string {
-  // Special handling for TEXT files
-  if (fileName.toLowerCase().endsWith('.txt')) {
-    return `This is a sample text file: ${fileName}
-
-You can edit this content using the AetherFolio editor.
-This is a plain text file that supports:
-- Direct text editing
-- Search and replace functionality
-- Batch replacement operations
-- Export functionality
-
-Lorem ipsum dolor sit amet, consectetur adipiscing elit. 
-Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. 
-Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.
-
-You can add your own content here and use all the editing features available in AetherFolio.`;
-  }
-  
-  switch (language) {
-    case 'html':
-      return `<!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml">
-<head>
-    <title>${fileName}</title>
-    <link rel="stylesheet" type="text/css" href="../styles/style.css"/>
-</head>
-<body>
-    <div class="chapter">
-        <h1>Chapter Title</h1>
-        <p>This is a sample paragraph in the EPUB file. You can edit this content using the AetherFolio editor.</p>
-        <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>
-    </div>
-</body>
-</html>`;
-    
-    case 'css':
-      return `/* EPUB Stylesheet */
-body {
-    font-family: "Times New Roman", serif;
-    font-size: 1em;
-    line-height: 1.6;
-    margin: 0;
-    padding: 1em;
-}
-
-.chapter {
-    max-width: 600px;
-    margin: 0 auto;
-}
-
-h1 {
-    color: #333;
-    font-size: 1.8em;
-    margin-bottom: 1em;
-    text-align: center;
-}
-
-p {
-    text-align: justify;
-    margin-bottom: 1em;
-    text-indent: 1.5em;
-}`;
-    
-    case 'xml':
-      return `<?xml version="1.0" encoding="UTF-8"?>
-<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="3.0">
-    <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-        <dc:title>Sample EPUB Book</dc:title>
-        <dc:creator>Author Name</dc:creator>
-        <dc:language>en</dc:language>
-        <dc:identifier id="BookId">urn:uuid:12345</dc:identifier>
-        <meta property="dcterms:modified">2024-01-01T00:00:00Z</meta>
-    </metadata>
-    <manifest>
-        <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
-        <item id="chapter1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
-        <item id="style" href="styles/style.css" media-type="text/css"/>
-    </manifest>
-    <spine>
-        <itemref idref="chapter1"/>
-    </spine>
-</package>`;
-    
-    case 'plaintext':
-      return `Sample content for ${fileName}
-
-This is a plain text file.
-You can edit this content using the AetherFolio editor.
-
-Features available:
-- Text editing
-- Search and replace
-- Batch operations
-- Export functionality`;
-    
-    default:
-      return `// ${fileName}
-// This is a sample file content.
-// You can edit this content using the AetherFolio editor.
-
-Sample content for ${fileName}`;
-  }
-}
+// Mock file content generator function has been removed to fix compilation issues
 
 export default useAppStore;

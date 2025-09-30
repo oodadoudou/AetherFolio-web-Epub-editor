@@ -18,7 +18,7 @@ class Session(BaseModel):
     """会话模型"""
     
     session_id: str = Field(..., description="会话ID")
-    epub_path: str = Field(..., description="EPUB文件路径")
+    epub_path: Optional[str] = Field(None, description="EPUB文件路径")
     upload_time: datetime = Field(..., description="上传时间")
     last_accessed: datetime = Field(default_factory=datetime.now, description="最后访问时间")
     expires_at: datetime = Field(..., description="过期时间")

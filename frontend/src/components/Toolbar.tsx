@@ -19,9 +19,12 @@ interface ToolbarProps {
   isDarkMode: boolean;
   onThemeToggle: () => void;
   onExitEditor?: () => void;
+  onSave?: () => void;
+  onExport?: () => void;
+  sessionId?: string;
 }
 
-const Toolbar: React.FC<ToolbarProps> = ({ metadata, onMetadataChange, onBatchReplace, isDarkMode, onThemeToggle, onExitEditor }) => {
+const Toolbar: React.FC<ToolbarProps> = ({ metadata, onMetadataChange, onBatchReplace, isDarkMode, onThemeToggle, onExitEditor, onSave, onExport, sessionId }) => {
   const handleTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     onMetadataChange({ ...metadata, title: e.target.value });
   };
@@ -56,10 +59,20 @@ const Toolbar: React.FC<ToolbarProps> = ({ metadata, onMetadataChange, onBatchRe
               </>
             )}
             <Tooltip title="Save">
-              <Button icon={<SaveOutlined />} type="text" />
+              <Button 
+                icon={<SaveOutlined />} 
+                type="text" 
+                onClick={onSave}
+                disabled={!sessionId}
+              />
             </Tooltip>
             <Tooltip title="Export">
-              <Button icon={<ExportOutlined />} type="text" />
+              <Button 
+                icon={<ExportOutlined />} 
+                type="text" 
+                onClick={onExport}
+                disabled={!sessionId}
+              />
             </Tooltip>
             <Tooltip title="Undo">
               <Button icon={<UndoOutlined />} type="text" />

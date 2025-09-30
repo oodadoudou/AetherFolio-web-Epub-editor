@@ -54,6 +54,15 @@ htmlcov/
 nosetests.xml
 coverage/
 
+# Test reports and results
+test-results/
+playwright-report/
+backend/tests/
+*.xml
+*.json
+error-context.md
+tests/
+
 # Environment and Configuration
 .env
 .env.*
@@ -71,7 +80,15 @@ uploads/
 reports/
 backups/
 
+# Data directories
+data/session/
+db/data/
+*.db
+*.sqlite
+*.sqlite3
+
 # Debug and test files
+debug/
 debug_*.py
 debug_api_response.py
 debug_batch_replace.py

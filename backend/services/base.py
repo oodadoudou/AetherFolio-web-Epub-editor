@@ -5,8 +5,8 @@ import time
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional, TypeVar, Generic
 from contextlib import asynccontextmanager
-from backend.core.logging import get_logger, performance_logger
-from backend.core.config import settings
+from core.logging import get_logger, performance_logger
+from core.config import settings
 
 
 T = TypeVar('T')
@@ -58,10 +58,13 @@ class BaseService(ABC):
             yield
         finally:
             duration = time.time() - start_time
-            performance_logger.log_operation_time(
-                operation=f"{self.service_name}.{operation}",
-                duration=duration,
-                **kwargs
+            performance_logger.info(
+                f"Operation {self.service_name}.{operation} completed in {duration:.3f}s",
+                extra={
+                    "operation": f"{self.service_name}.{operation}",
+                    "duration": duration,
+                    **kwargs
+                }
             )
     
     def log_error(self, message: str, error: Exception, **kwargs):

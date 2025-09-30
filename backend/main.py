@@ -13,12 +13,12 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 # 导入配置和核心模块
-from backend.core.config import settings
-from backend.core.logging import performance_logger, security_logger
-from backend.models.schemas import ErrorResponse, ResponseStatus, ErrorCode
+from core.config import settings
+from core.logging import performance_logger, security_logger
+from db.models.schemas import ErrorResponse, ResponseStatus, ErrorCode
 
 # 导入中间件
-from backend.middleware.performance import (
+from middleware.performance import (
     PerformanceMiddleware,
     RequestSizeMiddleware,
     SecurityHeadersMiddleware,
@@ -26,20 +26,28 @@ from backend.middleware.performance import (
 )
 
 # 导入API路由
-from backend.api.upload import router as upload_router
-from backend.api.replace import router as replace_router
-from backend.api.files import router as files_router
-from backend.api.sessions import router as sessions_router
-from backend.api.endpoints.export import router as export_router
-from backend.api.endpoints.search_replace import router as search_replace_router
-from backend.api.endpoints.file_content import router as file_content_router
-from backend.api.endpoints.save_file import router as save_file_router
+from api.upload import router as upload_router
+from api.replace import router as replace_router
+from api.files import router as files_router
+from api.sessions import router as sessions_router
+from api.rules import router as rules_router
+from api.endpoints.export import router as export_router
+from api.endpoints.search_replace import router as search_replace_router
+# from api.endpoints.file_content import router as file_content_router  # 已合并到files_router
+from api.endpoints.save_file import router as save_file_router
+from api.endpoints.auth import router as auth_router
+from api.endpoints.epub_chapters import router as epub_chapters_router
+from api.endpoints.backup import router as backup_router
+from api.websocket import router as websocket_router
+from api.static import router as static_router
+from api.preview import router as preview_router
 
 # 导入服务
-from backend.services.session_service import session_service
-from backend.services.epub_service import epub_service
-from backend.services.replace_service import replace_service
-from backend.services.preview_service import preview_service
+from services.session_service import session_service
+from services.epub_service import epub_service
+from services.replace_service import replace_service
+from services.preview_service import preview_service
+from services.file_service import file_service
 
 
 @asynccontextmanager
@@ -48,18 +56,24 @@ async def lifespan(app: FastAPI):
     # 启动时初始化
     try:
         # 确保必要的目录存在
-        settings._ensure_directories()
+        settings.ensure_directories()
+        
+        # 初始化数据库
+        from db.connection import db_manager
+        db_manager.initialize_default_databases()
+        db_manager.create_all_tables()
         
         # 初始化服务
         await session_service.initialize()
         await epub_service.initialize()
         await replace_service.initialize()
         await preview_service.initialize()
+        await file_service.initialize()
         
         # 启动定期清理任务
         cleanup_task = asyncio.create_task(_periodic_cleanup())
         
-        security_logger.logger.info(
+        security_logger.info(
             "AetherFolio backend started successfully",
             extra={
                 "version": "1.0.0",
@@ -73,7 +87,7 @@ async def lifespan(app: FastAPI):
         yield
         
     except Exception as e:
-        security_logger.logger.error(
+        security_logger.error(
             "Error during startup",
             extra={
                 "error": str(e),
@@ -85,24 +99,24 @@ async def lifespan(app: FastAPI):
     finally:
         # 关闭时清理
         try:
-            # 取消清理任务
-            if 'cleanup_task' in locals():
-                cleanup_task.cancel()
-                try:
-                    await cleanup_task
-                except asyncio.CancelledError:
-                    pass
+            # 停止定期清理任务
+            cleanup_task.cancel()
+            try:
+                await cleanup_task
+            except asyncio.CancelledError:
+                pass
             
             # 清理服务
             await preview_service.cleanup()
             await replace_service.cleanup()
             await epub_service.cleanup()
             await session_service.cleanup()
+            await file_service.cleanup()
             
-            security_logger.logger.info("AetherFolio backend stopped", extra={"event_type": "shutdown"})
+            security_logger.info("AetherFolio backend stopped", extra={"event_type": "shutdown"})
             
         except Exception as e:
-            security_logger.logger.error("Error during shutdown", extra={"error": str(e), "event_type": "shutdown_error"})
+            security_logger.error("Error during shutdown", extra={"error": str(e), "event_type": "shutdown_error"})
 
 
 # 创建FastAPI应用
@@ -133,7 +147,7 @@ app.add_middleware(
 # 添加自定义中间件（按顺序添加）
 # 注意：中间件是按照相反的顺序执行的，最后添加的最先执行
 app.add_middleware(PerformanceMiddleware)
-app.add_middleware(RequestSizeMiddleware, max_size=settings.max_file_size)
+app.add_middleware(RequestSizeMiddleware, max_size=settings.max_request_size)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(ErrorHandlingMiddleware)
 
@@ -149,7 +163,7 @@ async def http_exception_handler(request, exc: HTTPException):
     
     # 记录HTTP异常
     if exc.status_code >= 500:
-        security_logger.logger.error(
+        security_logger.error(
             f"HTTP exception occurred: {exc.detail}",
             extra={
                 "request_id": request_id,
@@ -158,7 +172,7 @@ async def http_exception_handler(request, exc: HTTPException):
             }
         )
     elif exc.status_code >= 400:
-        security_logger.logger.warning(
+        security_logger.warning(
             f"Client error: {exc.detail}",
             extra={
                 "request_id": request_id,
@@ -215,7 +229,7 @@ async def validation_exception_handler(request, exc: RequestValidationError):
     """请求验证异常处理器"""
     request_id = getattr(request.state, "request_id", "unknown")
     
-    security_logger.logger.warning(
+    security_logger.warning(
         "Request validation error",
         extra={
             "request_id": request_id,
@@ -241,7 +255,7 @@ async def starlette_exception_handler(request, exc: StarletteHTTPException):
     """Starlette HTTP异常处理器"""
     request_id = getattr(request.state, "request_id", "unknown")
     
-    security_logger.logger.warning(
+    security_logger.warning(
         f"Starlette HTTP exception: {exc.detail}",
         extra={
             "request_id": request_id,
@@ -263,17 +277,24 @@ async def starlette_exception_handler(request, exc: StarletteHTTPException):
 
 
 # 注册API路由
+app.include_router(auth_router)  # auth_router已经包含了完整的prefix
 app.include_router(upload_router, prefix="/api/v1")
-app.include_router(replace_router, prefix="/api/v1")
-app.include_router(files_router, prefix="/api/v1")
-app.include_router(sessions_router, prefix="/api/v1")
-app.include_router(export_router, prefix="/api/v1")
+app.include_router(replace_router)  # replace_router已经包含了完整的prefix
+app.include_router(files_router)  # files_router已经包含了完整的prefix
+app.include_router(sessions_router)  # sessions_router已经包含了完整的prefix
+app.include_router(rules_router)  # rules_router已经包含了完整的prefix
+app.include_router(export_router)  # export_router已经包含了完整的prefix
 app.include_router(search_replace_router, prefix="/api/v1")
-app.include_router(file_content_router, prefix="/api/v1")
-app.include_router(save_file_router, prefix="/api/v1")
+# app.include_router(file_content_router)  # 已合并到files_router，避免重复注册
+app.include_router(save_file_router)  # save_file_router已经包含了完整的prefix
+app.include_router(epub_chapters_router)  # epub_chapters_router已经包含了完整的prefix
+app.include_router(backup_router)  # backup_router已经包含了完整的prefix
+app.include_router(websocket_router)  # websocket_router已经包含了完整的prefix
+app.include_router(static_router)  # static_router已经包含了完整的prefix
+app.include_router(preview_router)  # preview_router已经包含了完整的prefix
 
 # 为BE-01任务添加统一上传端点
-from backend.api.upload import upload_file
+from api.upload import upload_file
 app.post("/api/v1/upload")(upload_file)
 
 
@@ -312,7 +333,7 @@ async def health_check():
             }
         }
     except Exception as e:
-        security_logger.logger.error(f"Health check failed: {e}")
+        security_logger.error(f"Health check failed: {e}")
         
         return JSONResponse(
             status_code=503,
@@ -347,10 +368,16 @@ async def _periodic_cleanup():
             # 清理过期会话
             cleaned_count = await session_service.cleanup_expired_sessions()
             
-            if cleaned_count > 0:
+            # 清理断开连接的会话（1小时后清理）
+            disconnected_count = await session_service.cleanup_disconnected_sessions(max_age_hours=1)
+            
+            if cleaned_count > 0 or disconnected_count > 0:
                 security_logger.logger.info(
                     "Periodic cleanup completed",
-                    extra={"cleaned_sessions": cleaned_count}
+                    extra={
+                        "cleaned_expired_sessions": cleaned_count,
+                        "cleaned_disconnected_sessions": disconnected_count
+                    }
                 )
             
         except asyncio.CancelledError:

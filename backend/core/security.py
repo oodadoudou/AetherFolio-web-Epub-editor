@@ -2,473 +2,471 @@
 
 import os
 import re
-# import magic  # 暂时注释掉，避免依赖问题
 import hashlib
+import mimetypes
+import uuid
 from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import List, Optional, Tuple, Dict, Any
 from fastapi import HTTPException, UploadFile
-from backend.core.config import settings
-from backend.models.schemas import ErrorCode
+from .exceptions import FileValidationError
+from .logging import security_monitor
 
 
 class SecurityValidator:
     """安全验证器"""
     
-    # 危险文件扩展名
-    DANGEROUS_EXTENSIONS = {
-        '.exe', '.bat', '.cmd', '.com', '.pif', '.scr', '.vbs', '.js',
-        '.jar', '.app', '.deb', '.pkg', '.dmg', '.iso', '.msi', '.dll',
-        '.so', '.dylib', '.sh', '.ps1', '.php', '.asp', '.jsp'
+    # 允许的文件扩展名
+    ALLOWED_EXTENSIONS = {
+        '.epub', '.txt', '.html', '.htm', '.xhtml', '.xml',
+        '.css', '.js', '.json', '.md', '.markdown'
     }
     
-    # 允许的文件名字符（包含中文、韩文、日文等Unicode字符）
-    ALLOWED_FILENAME_PATTERN = re.compile(r'^[a-zA-Z0-9._\-\s\u4e00-\u9fff\uac00-\ud7af\u3040-\u309f\u30a0-\u30ff]+$')
+    # 危险的文件扩展名
+    DANGEROUS_EXTENSIONS = {
+        '.exe', '.bat', '.cmd', '.com', '.scr', '.pif',
+        '.vbs', '.js', '.jar', '.app', '.deb', '.rpm',
+        '.dmg', '.pkg', '.msi', '.dll', '.so', '.dylib'
+    }
     
-    # 路径遍历模式
-    PATH_TRAVERSAL_PATTERNS = [
-        r'\.\.', 
-        r'\\\.\.\\',
-        r'/\.\./',
-        r'%2e%2e',
-        r'%252e%252e',
-        r'%c0%ae%c0%ae',
-        r'%c1%9c',
-        r'\\',
-        r'//',
-        r'\.\./',
-        r'\.\.\\\\',
-        r'%2F%2E%2E%2F',
-        r'%5C%2E%2E%5C',
-        r'\\u002e\\u002e',
-        r'\\x2e\\x2e',
-        r'%u002e%u002e'
+    # 允许的MIME类型
+    ALLOWED_MIME_TYPES = {
+        'application/epub+zip',
+        'text/plain',
+        'text/html',
+        'application/xhtml+xml',
+        'text/xml',
+        'application/xml',
+        'text/css',
+        'application/javascript',
+        'application/json',
+        'text/markdown'
+    }
+    
+    # 危险的文件名模式
+    DANGEROUS_PATTERNS = [
+        r'\.\.\/',  # 路径遍历
+        r'[<>:"|?*\\]',  # Windows非法字符（不包括反斜杠转义）
+        r'^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$',  # Windows保留名
+        r'^\.',  # 隐藏文件
     ]
     
-    @classmethod
-    def validate_file_path(cls, file_path: str) -> bool:
-        """验证文件路径安全性
+    def __init__(self):
+        self.max_file_size = 100 * 1024 * 1024  # 100MB
+        self.max_filename_length = 255
+    
+    def sanitize_path(self, file_path: str, base_dir: str) -> str:
+        """安全地组合文件路径和基础目录
         
         Args:
-            file_path: 文件路径
-            
+            file_path: 相对文件路径
+            base_dir: 基础目录路径
+        
         Returns:
-            bool: 路径是否安全
-            
+            str: 安全的完整路径
+        
         Raises:
-            SecurityError: 当路径不安全时抛出异常
+            ValueError: 如果路径不安全
         """
-        from backend.core.exceptions import SecurityError
+        if not file_path or not base_dir:
+            raise ValueError("文件路径和基础目录不能为空")
         
-        if not file_path:
-            raise SecurityError("File path cannot be empty")
+        # 规范化路径
+        normalized_base_dir = os.path.normpath(base_dir)
+        
+        # 移除文件路径开头的斜杠（如果有）
+        clean_file_path = file_path
+        if clean_file_path.startswith(('/', '\\')):
+            clean_file_path = clean_file_path[1:]
+        
+        # 组合路径并规范化
+        full_path = os.path.join(normalized_base_dir, clean_file_path)
+        full_path = os.path.normpath(full_path)
+        
+        # 确保最终路径在基础目录范围内
+        try:
+            # 获取绝对路径进行比较
+            abs_full_path = os.path.abspath(full_path)
+            abs_base_dir = os.path.abspath(normalized_base_dir)
             
-        # 检查路径遍历攻击
-        for pattern in cls.PATH_TRAVERSAL_PATTERNS:
-            if re.search(pattern, file_path, re.IGNORECASE):
-                raise SecurityError(f"Path traversal attack detected: {file_path}")
+            # 检查路径是否在基础目录内或其父目录内（允许合法的相对路径）
+            # 但要确保不会访问到系统敏感目录
+            if not (abs_full_path.startswith(abs_base_dir + os.sep) or abs_full_path == abs_base_dir):
+                # 检查是否是合法的EPUB内部相对路径
+                # 允许访问EPUB结构内的文件，如../Styles/stylesheet.css
+                epub_base = os.path.dirname(abs_base_dir)
+                if abs_full_path.startswith(epub_base + os.sep):
+                    # 确保不会访问到系统敏感目录
+                    sensitive_paths = ['/etc', '/bin', '/sbin', '/usr', '/var', '/root', '/home']
+                    for sensitive in sensitive_paths:
+                        if abs_full_path.startswith(sensitive):
+                            raise ValueError(f"路径访问被拒绝: {file_path}")
+                else:
+                    raise ValueError(f"路径超出基础目录范围: {file_path}")
+        except Exception as e:
+            if "路径" in str(e):
+                raise e
+            raise ValueError(f"路径验证失败: {str(e)}")
         
-        # 检查绝对路径（更严格的检测）
-        if os.path.isabs(file_path) or file_path.startswith('/') or (len(file_path) > 1 and file_path[1] == ':'):
-            raise SecurityError("Absolute paths are not allowed")
+        return full_path
+
+    def validate_session_id(self, session_id: str) -> bool:
+        """验证会话ID格式
         
-        # 检查Windows驱动器路径
-        if re.match(r'^[a-zA-Z]:\\', file_path):
-            raise SecurityError("Windows drive paths are not allowed")
-            
-        # 检查路径长度（更严格的限制）
-        if len(file_path) > 255:
-            raise SecurityError("File path too long")
+        Args:
+            session_id: 会话ID字符串
         
-        # 检查超长路径攻击
-        if len(file_path) > 1000:
-            raise SecurityError("Extremely long path detected - possible attack")
+        Returns:
+            bool: 是否为有效的UUID格式
         
-        # 检查重复路径遍历模式
-        if file_path.count('../') > 20 or file_path.count('..\\') > 20:
-            raise SecurityError("Excessive path traversal patterns detected")
-            
-        # 检查路径深度
-        if file_path.count('/') > 10 or file_path.count('\\') > 10:
-            raise SecurityError("File path depth exceeds limit")
+        Raises:
+            ValueError: 如果session_id格式无效
+        """
+        if not session_id:
+            raise ValueError("会话ID不能为空")
         
-        # 检查NULL字节注入
-        if '\x00' in file_path or '\0' in file_path:
-            raise SecurityError(f"NULL byte injection detected: {repr(file_path)}")
+        if not isinstance(session_id, str):
+            raise ValueError("会话ID必须是字符串")
         
-        # 检查危险字符
-        dangerous_chars = ['<', '>', ':', '"', '|', '?', '*']
-        for char in dangerous_chars:
-            if char in file_path:
-                raise SecurityError(f"File path contains dangerous character: {repr(char)}")
+        # 检查长度（标准UUID长度为36字符，包含连字符）
+        if len(session_id) != 36:
+            raise ValueError("会话ID长度无效")
         
-        # 检查Windows保留名称
-        reserved_names = ['CON', 'PRN', 'AUX', 'NUL', 'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9', 'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9']
-        filename = os.path.basename(file_path).upper().split('.')[0]
-        if filename in reserved_names:
-            raise SecurityError(f"File name uses reserved name: {filename}")
-            
-        return True
+        try:
+            # 尝试解析为UUID
+            uuid_obj = uuid.UUID(session_id)
+            # 确保是有效的UUID格式（版本4）
+            if uuid_obj.version != 4:
+                raise ValueError("会话ID必须是UUID版本4格式")
+            return True
+        except ValueError as e:
+            if "会话ID" in str(e):
+                raise e
+            raise ValueError(f"无效的会话ID格式: {session_id}")
     
-    @classmethod
-    def validate_filename(cls, filename: str) -> bool:
-        """验证文件名安全性
+    def validate_filename(self, filename: str) -> Tuple[bool, List[str]]:
+        """验证文件名
         
         Args:
             filename: 文件名
-            
+        
         Returns:
-            bool: 文件名是否安全
+            (是否有效, 错误信息列表)
         """
-        if not filename:
-            return False
-            
+        errors = []
+        
         # 检查文件名长度
-        if len(filename) > 255:
-            return False
-            
-        # 检查危险字符
-        if not cls.ALLOWED_FILENAME_PATTERN.match(filename):
-            return False
-            
-        # 检查危险扩展名
+        if len(filename) > self.max_filename_length:
+            errors.append(f"文件名过长，最大长度为 {self.max_filename_length} 字符")
+        
+        # 检查文件名是否为空
+        if not filename.strip():
+            errors.append("文件名不能为空")
+        
+        # 检查危险模式
+        for pattern in self.DANGEROUS_PATTERNS:
+            if re.search(pattern, filename, re.IGNORECASE):
+                errors.append(f"文件名包含不安全字符或模式: {pattern}")
+        
+        # 检查文件扩展名
         file_ext = Path(filename).suffix.lower()
-        if file_ext in cls.DANGEROUS_EXTENSIONS:
-            return False
-            
-        # 检查保留名称（Windows）
-        reserved_names = {
-            'CON', 'PRN', 'AUX', 'NUL', 'COM1', 'COM2', 'COM3', 'COM4',
-            'COM5', 'COM6', 'COM7', 'COM8', 'COM9', 'LPT1', 'LPT2',
-            'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'
-        }
+        if file_ext in self.DANGEROUS_EXTENSIONS:
+            errors.append(f"不允许的文件类型: {file_ext}")
         
-        name_without_ext = Path(filename).stem.upper()
-        if name_without_ext in reserved_names:
-            return False
-            
-        return True
-    
-    @classmethod
-    def get_file_mime_type(cls, file_path: str) -> Optional[str]:
-        """获取文件MIME类型
+        if file_ext not in self.ALLOWED_EXTENSIONS:
+            errors.append(f"不支持的文件类型: {file_ext}")
         
-        Args:
-            file_path: 文件路径
-            
-        Returns:
-            Optional[str]: MIME类型
-        """
-        try:
-            # 基于文件扩展名的简单MIME类型检测
-            file_ext = Path(file_path).suffix.lower()
-            mime_map = {
-                '.epub': 'application/epub+zip',
-                '.txt': 'text/plain',
-                '.pdf': 'application/pdf',
-                '.jpg': 'image/jpeg',
-                '.jpeg': 'image/jpeg',
-                '.png': 'image/png',
-                '.html': 'text/html',
-                '.css': 'text/css',
-                '.xml': 'application/xml'
-            }
-            return mime_map.get(file_ext)
-        except Exception:
-            return None
+        return len(errors) == 0, errors
     
-    @classmethod
-    def validate_file_type(cls, file_path: str, allowed_types: List[str]) -> bool:
-        """验证文件类型
-        
-        Args:
-            file_path: 文件路径
-            allowed_types: 允许的MIME类型列表
-            
-        Returns:
-            bool: 文件类型是否允许
-        """
-        # 简单的文件扩展名检查，替代magic库
-        try:
-            file_ext = Path(file_path).suffix.lower()
-            if file_ext == '.epub' and 'application/epub+zip' in allowed_types:
-                return True
-            elif file_ext == '.txt' and 'text/plain' in allowed_types:
-                return True
-            elif file_ext == '.pdf' and 'application/pdf' in allowed_types:
-                return True
-            elif file_ext in ['.jpg', '.jpeg'] and 'image/jpeg' in allowed_types:
-                return True
-            elif file_ext == '.png' and 'image/png' in allowed_types:
-                return True
-            return False
-        except Exception:
-            return False
-    
-    @classmethod
-    def validate_file_size(cls, file_path: str, max_size: int) -> bool:
+    def validate_file_size(self, file_size: int) -> Tuple[bool, List[str]]:
         """验证文件大小
         
         Args:
-            file_path: 文件路径
-            max_size: 最大文件大小（字节）
-            
+            file_size: 文件大小（字节）
+        
         Returns:
-            bool: 文件大小是否符合要求
+            (是否有效, 错误信息列表)
         """
-        try:
-            file_size = os.path.getsize(file_path)
-            return file_size <= max_size
-        except OSError:
-            return False
+        errors = []
+        
+        if file_size <= 0:
+            errors.append("文件大小无效")
+        elif file_size > self.max_file_size:
+            max_mb = self.max_file_size / (1024 * 1024)
+            errors.append(f"文件过大，最大允许 {max_mb:.1f}MB")
+        
+        return len(errors) == 0, errors
     
-    @classmethod
-    def calculate_file_hash(cls, file_path: str, algorithm: str = 'sha256') -> Optional[str]:
-        """计算文件哈希值
+    def validate_mime_type(self, filename: str, content: bytes = None) -> Tuple[bool, List[str]]:
+        """验证MIME类型
         
         Args:
-            file_path: 文件路径
-            algorithm: 哈希算法
-            
+            filename: 文件名
+            content: 文件内容（可选）
+        
         Returns:
-            Optional[str]: 文件哈希值
+            (是否有效, 错误信息列表)
         """
-        try:
-            hash_obj = hashlib.new(algorithm)
-            with open(file_path, 'rb') as f:
-                for chunk in iter(lambda: f.read(4096), b''):
-                    hash_obj.update(chunk)
-            return hash_obj.hexdigest()
-        except Exception:
-            return None
+        errors = []
+        
+        # 基于文件名猜测MIME类型
+        mime_type, _ = mimetypes.guess_type(filename)
+        
+        if mime_type and mime_type not in self.ALLOWED_MIME_TYPES:
+            errors.append(f"不允许的文件类型: {mime_type}")
+        
+        # 如果有文件内容，进行更详细的检查
+        if content:
+            # 检查文件头
+            if filename.lower().endswith('.epub'):
+                if not content.startswith(b'PK'):
+                    errors.append("EPUB文件格式无效")
+            elif filename.lower().endswith(('.txt', '.html', '.htm', '.xml', '.css', '.js')):
+                try:
+                    content.decode('utf-8')
+                except UnicodeDecodeError:
+                    try:
+                        content.decode('gbk')
+                    except UnicodeDecodeError:
+                        errors.append("文本文件编码无效")
+        
+        return len(errors) == 0, errors
     
-    @classmethod
-    async def validate_upload_file(
-        cls,
-        file: UploadFile,
-        allowed_types: Optional[List[str]] = None,
-        max_size: Optional[int] = None
-    ) -> Tuple[bool, Optional[str]]:
+    def validate_file_content(self, content: bytes, filename: str) -> Tuple[bool, List[str]]:
+        """验证文件内容
+        
+        Args:
+            content: 文件内容
+            filename: 文件名
+        
+        Returns:
+            (是否有效, 错误信息列表)
+        """
+        errors = []
+        
+        # 检查是否包含恶意脚本
+        content_str = ""
+        try:
+            content_str = content.decode('utf-8', errors='ignore')
+        except:
+            try:
+                content_str = content.decode('gbk', errors='ignore')
+            except:
+                pass
+        
+        if content_str:
+            # 检查危险的脚本模式
+            dangerous_patterns = [
+                r'<script[^>]*>.*?</script>',
+                r'javascript:',
+                r'vbscript:',
+                r'on\w+\s*=',
+                r'eval\s*\(',
+                r'document\.write',
+                r'innerHTML\s*='
+            ]
+            
+            for pattern in dangerous_patterns:
+                if re.search(pattern, content_str, re.IGNORECASE | re.DOTALL):
+                    errors.append(f"文件包含潜在的恶意脚本: {pattern}")
+        
+        return len(errors) == 0, errors
+    
+    def validate_upload_file(self, file: UploadFile) -> Tuple[bool, List[str]]:
         """验证上传文件
         
         Args:
             file: 上传的文件
-            allowed_types: 允许的MIME类型
-            max_size: 最大文件大小
-            
+        
         Returns:
-            Tuple[bool, Optional[str]]: (是否有效, 错误信息)
+            (是否有效, 错误信息列表)
         """
-        if not file:
-            return False, "文件不能为空"
-            
+        all_errors = []
+        
         # 验证文件名
-        if not cls.validate_filename(file.filename):
-            return False, "文件名包含非法字符或格式不正确"
-            
+        valid, errors = self.validate_filename(file.filename)
+        all_errors.extend(errors)
+        
         # 验证文件大小
-        if max_size is None:
-            max_size = settings.max_file_size
-            
-        if file.size and file.size > max_size:
-            return False, f"文件大小超过限制（{max_size / 1024 / 1024:.1f}MB）"
-            
-        # 验证文件类型
-        if allowed_types is None:
-            allowed_types = settings.allowed_file_types
-            
-        if file.content_type not in allowed_types:
-            return False, f"不支持的文件类型：{file.content_type}"
-            
-        return True, None
-    
-    @classmethod
-    def sanitize_path(cls, path: str, base_dir: str) -> str:
-        """清理和规范化路径
+        if hasattr(file, 'size') and file.size is not None:
+            valid, errors = self.validate_file_size(file.size)
+            all_errors.extend(errors)
         
-        Args:
-            path: 原始路径
-            base_dir: 基础目录
-            
-        Returns:
-            str: 清理后的安全路径
-        """
-        # 移除危险字符
-        path = re.sub(r'[<>:"|?*]', '', path)
+        # 验证MIME类型
+        valid, errors = self.validate_mime_type(file.filename)
+        all_errors.extend(errors)
         
-        # 规范化路径
-        path = os.path.normpath(path)
-        
-        # 确保路径在基础目录内
-        full_path = os.path.join(base_dir, path)
-        full_path = os.path.abspath(full_path)
-        base_dir = os.path.abspath(base_dir)
-        
-        if not full_path.startswith(base_dir):
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "status": "error",
-                    "error_code": ErrorCode.INVALID_PATH,
-                    "message": "路径不在允许的目录范围内"
-                }
-            )
-            
-        return full_path
-    
-    @classmethod
-    def validate_session_id(cls, session_id: str) -> bool:
-        """验证会话ID格式
-        
-        Args:
-            session_id: 会话ID
-            
-        Returns:
-            bool: 会话ID是否有效
-        """
-        from backend.core.exceptions import SecurityError
-        
-        if session_id is None:
-            raise SecurityError("Session ID cannot be None")
-            
-        if not isinstance(session_id, str):
-            raise SecurityError("Session ID must be a string")
-            
-        if not session_id or session_id == "":
-            raise SecurityError("Session ID cannot be empty")
-            
-        # 检查长度
-        if len(session_id) < 16 or len(session_id) > 64:
-            raise SecurityError("Session ID length must be between 16 and 64 characters")
-            
-        # 检查字符集（只允许字母数字和连字符）
-        if not re.match(r'^[a-zA-Z0-9\-_]+$', session_id):
-            raise SecurityError("Session ID contains invalid characters")
-            
-        return True
-    
-    def sanitize_filename(self, filename: str) -> str:
-        """清理文件名"""
-        import re
-        import os
-        
-        # 移除路径分隔符
-        filename = os.path.basename(filename)
-        
-        # 替换空格为下划线
-        filename = filename.replace(' ', '_')
-        
-        # 移除危险字符
-        filename = re.sub(r'[<>:"|?*\x00-\x1f]', '', filename)
-        
-        # 移除路径遍历
-        filename = filename.replace('..', '')
-        
-        # 确保不为空
-        if not filename:
-            filename = 'unnamed_file'
-        
-        return filename
-    
-    def validate_content_length(self, content: str, max_length: int = 10000) -> bool:
-        """验证内容长度"""
-        if len(content) > max_length:
-            from backend.core.exceptions import SecurityError
-            raise SecurityError(f"内容长度超过限制: {len(content)} > {max_length}")
-        return True
-    
-    @classmethod
-    def generate_secure_filename(cls, original_filename: str) -> str:
-        """生成安全的文件名
-        
-        Args:
-            original_filename: 原始文件名
-            
-        Returns:
-            str: 安全的文件名
-        """
-        # 获取文件扩展名
-        file_ext = Path(original_filename).suffix
-        
-        # 生成时间戳和随机字符串
-        import time
-        import uuid
-        
-        timestamp = str(int(time.time()))
-        random_str = str(uuid.uuid4())[:8]
-        
-        # 组合安全文件名
-        safe_filename = f"{timestamp}_{random_str}{file_ext}"
-        
-        return safe_filename
-
-
-# 创建全局验证器实例
-security_validator = SecurityValidator()
+        return len(all_errors) == 0, all_errors
 
 
 class FileValidator:
     """文件验证器"""
     
-    def validate_epub_file(self, file: UploadFile) -> bool:
-        """验证EPUB文件"""
-        # 检查文件扩展名
-        if not file.filename or not file.filename.lower().endswith('.epub'):
-            from backend.core.exceptions import FileValidationError
-            raise FileValidationError("文件必须是.epub格式")
+    def __init__(self):
+        self.security_validator = SecurityValidator()
+    
+    def validate_file_path(self, file_path: str) -> bool:
+        """验证文件路径是否安全
         
-        # 检查MIME类型
-        allowed_types = ['application/epub+zip', 'application/zip']
-        if file.content_type and file.content_type not in allowed_types:
-            from backend.core.exceptions import FileValidationError
-            raise FileValidationError(f"不支持的文件类型: {file.content_type}")
+        Args:
+            file_path: 文件路径
+        
+        Returns:
+            是否安全
+        """
+        # 规范化路径
+        normalized_path = os.path.normpath(file_path)
+        
+        # 检查路径遍历
+        if '..' in normalized_path:
+            security_monitor.log_security_violation(
+                "path_traversal",
+                f"尝试路径遍历: {file_path}"
+            )
+            return False
+        
+        # 检查绝对路径
+        if os.path.isabs(normalized_path):
+            security_monitor.log_security_violation(
+                "absolute_path",
+                f"尝试访问绝对路径: {file_path}"
+            )
+            return False
         
         return True
     
-    @classmethod
-    def validate_epub_file_by_path(cls, file_path: str) -> bool:
-        """通过路径验证EPUB文件"""
-        return SecurityValidator.validate_file_type(file_path, ['application/epub+zip'])
+    def validate_file_operation(self, file_path: str, operation: str, user: str = "unknown") -> bool:
+        """验证文件操作
+        
+        Args:
+            file_path: 文件路径
+            operation: 操作类型
+            user: 用户
+        
+        Returns:
+            是否允许操作
+        """
+        # 记录文件访问
+        security_monitor.log_file_access(file_path, user, operation)
+        
+        # 验证路径安全性
+        if not self.validate_file_path(file_path):
+            return False
+        
+        # 验证文件名
+        filename = os.path.basename(file_path)
+        valid, errors = self.security_validator.validate_filename(filename)
+        
+        if not valid:
+            security_monitor.log_security_violation(
+                "invalid_filename",
+                f"无效文件名: {filename}, 错误: {errors}"
+            )
+            return False
+        
+        return True
     
-    def validate_file_size(self, file: UploadFile, max_size: int = 50 * 1024 * 1024) -> bool:
-        """验证文件大小"""
+    def calculate_file_hash(self, content: bytes) -> str:
+        """计算文件哈希值
+        
+        Args:
+            content: 文件内容
+        
+        Returns:
+            SHA256哈希值
+        """
+        return hashlib.sha256(content).hexdigest()
+    
+    def validate_epub_file(self, file) -> bool:
+        """验证EPUB文件结构
+        
+        Args:
+            file: 上传的文件对象
+        
+        Returns:
+            是否为有效的EPUB文件
+        """
+        import zipfile
+        import tempfile
+        
         try:
-            # 获取文件大小
-            file.file.seek(0, 2)  # 移动到文件末尾
-            file_size = file.file.tell()
-            file.file.seek(0)  # 重置到文件开头
-            
-            if file_size > max_size:
-                from backend.core.exceptions import FileValidationError
-                raise FileValidationError(f"文件大小超过限制: {file_size} > {max_size}")
-            
-            return True
-        except Exception as e:
-            if hasattr(e, '__class__') and 'FileValidationError' in str(e.__class__):
-                raise
-            from backend.core.exceptions import FileValidationError
-            raise FileValidationError(f"文件大小验证失败: {str(e)}")
+            # 创建临时文件来保存上传的内容
+            with tempfile.NamedTemporaryFile() as temp_file:
+                # 重置文件指针到开头
+                file.file.seek(0)
+                content = file.file.read()
+                file.file.seek(0)  # 重置回开头
+                
+                temp_file.write(content)
+                temp_file.flush()
+                
+                # 尝试打开为ZIP文件
+                with zipfile.ZipFile(temp_file.name, 'r') as zip_file:
+                    # 检查必需的EPUB文件
+                    required_files = [
+                        'META-INF/container.xml',
+                        'mimetype'
+                    ]
+                    
+                    file_list = zip_file.namelist()
+                    
+                    # 检查必需文件是否存在
+                    for required_file in required_files:
+                        if required_file not in file_list:
+                            return False
+                    
+                    # 检查mimetype文件内容
+                    try:
+                        mimetype_content = zip_file.read('mimetype').decode('utf-8').strip()
+                        if mimetype_content != 'application/epub+zip':
+                            return False
+                    except:
+                        return False
+                    
+                    # 检查container.xml文件
+                    try:
+                        container_content = zip_file.read('META-INF/container.xml').decode('utf-8')
+                        # 简单检查是否包含rootfile元素
+                        if 'rootfile' not in container_content.lower():
+                            return False
+                    except:
+                        return False
+                    
+                    # 检查是否存在.opf文件（内容文档）
+                    opf_files = [f for f in file_list if f.endswith('.opf')]
+                    if not opf_files:
+                        return False
+                    
+                    return True
+                    
+        except zipfile.BadZipFile:
+            return False
+        except Exception:
+            return False
     
-    @classmethod
-    def validate_file_size_by_path(cls, file_path: str, max_size: int = None) -> bool:
-        """通过路径验证文件大小"""
-        return SecurityValidator.validate_file_size(file_path, max_size)
-    
-    def validate_rules_file(self, file: UploadFile) -> bool:
-        """验证规则文件"""
-        # 检查文件扩展名
-        allowed_extensions = ['.txt', '.csv', '.tsv']
-        if not file.filename or not any(file.filename.lower().endswith(ext) for ext in allowed_extensions):
-            from backend.core.exceptions import FileValidationError
-            raise FileValidationError(f"不支持的文件扩展名，支持的格式: {', '.join(allowed_extensions)}")
+    def validate_and_sanitize_filename(self, filename: str) -> str:
+        """验证并清理文件名
         
-        return True
-    
-    @classmethod
-    def validate_rules_file_by_path(cls, file_path: str) -> bool:
-        """通过路径验证规则文件"""
-        allowed_types = ['text/plain', 'text/csv', 'text/tab-separated-values']
-        return SecurityValidator.validate_file_type(file_path, allowed_types)
+        Args:
+            filename: 原始文件名
+        
+        Returns:
+            清理后的文件名
+        
+        Raises:
+            FileValidationError: 文件名无效
+        """
+        valid, errors = self.security_validator.validate_filename(filename)
+        
+        if not valid:
+            raise FileValidationError(f"文件名验证失败: {'; '.join(errors)}")
+        
+        # 清理文件名
+        sanitized = re.sub(r'[^\w\-_\.]', '_', filename)
+        sanitized = re.sub(r'_+', '_', sanitized)
+        
+        return sanitized
 
 
-# 创建全局文件验证器实例
+# 创建全局验证器实例
+security_validator = SecurityValidator()
 file_validator = FileValidator()

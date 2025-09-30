@@ -1,7 +1,7 @@
 // Files API service
 // Handles file operations (read, write, delete, rename)
 
-import { apiService, ApiResponse } from './api';
+import { ApiResponse } from './api';
 import { FileNode } from '../store/slices/filesSlice';
 
 export interface FileContent {

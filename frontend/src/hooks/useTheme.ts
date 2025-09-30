@@ -21,7 +21,7 @@ export interface UseThemeReturn {
  * @returns Theme state and actions
  */
 export function useTheme(): UseThemeReturn {
-  const { theme, setTheme: setStoreTheme, toggleTheme: toggleStoreTheme } = useAppStore();
+  const { theme, setTheme: setStoreTheme } = useAppStore();
   const [storedTheme, setStoredTheme] = useLocalStorage<Theme>(STORAGE_KEYS.THEME, 'auto');
 
   // Get system theme preference

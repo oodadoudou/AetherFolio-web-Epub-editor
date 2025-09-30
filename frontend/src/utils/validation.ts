@@ -9,22 +9,7 @@ export interface ValidationResult {
   warnings?: string[];
 }
 
-/**
- * Validate email address
- */
-export function validateEmail(email: string): ValidationResult {
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  
-  if (!email || email.trim() === '') {
-    return { isValid: false, error: 'Email is required' };
-  }
-  
-  if (!emailRegex.test(email)) {
-    return { isValid: false, error: 'Invalid email format' };
-  }
-  
-  return { isValid: true };
-}
+
 
 /**
  * Validate URL

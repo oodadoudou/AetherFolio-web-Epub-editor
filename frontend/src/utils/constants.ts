@@ -212,10 +212,9 @@ export const COLORS = {
 
 // Regular Expressions
 export const REGEX_PATTERNS = {
-  EMAIL: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
-  URL: /^https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)$/,
+  URL: /^https?:\/\/(www\.)?[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_+.~#?&//=]*)$/,
   UUID: /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
   FILENAME: /^[^<>:"/\\|?*]+$/,
   HTML_TAG: /<\/?[a-z][\s\S]*>/i,
-  CSS_SELECTOR: /^[a-zA-Z0-9\s\.,#:>\+~\[\]="'\-_]+$/,
+  CSS_SELECTOR: /^[a-zA-Z0-9\s.,#:>+~[\]="'\-_]+$/,
 } as const;

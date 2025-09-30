@@ -302,16 +302,18 @@ export function sortFiles<T extends { name: string; type: 'file' | 'directory'; 
       case 'size':
         comparison = (a.size || 0) - (b.size || 0);
         break;
-      case 'modified':
+      case 'modified': {
         const aTime = a.modified?.getTime() || 0;
         const bTime = b.modified?.getTime() || 0;
         comparison = aTime - bTime;
         break;
-      case 'type':
+      }
+      case 'type': {
         const aExt = getFileExtension(a.name) || '';
         const bExt = getFileExtension(b.name) || '';
         comparison = aExt.localeCompare(bExt);
         break;
+      }
     }
     
     return direction === 'desc' ? -comparison : comparison;

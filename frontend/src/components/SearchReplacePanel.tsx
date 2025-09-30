@@ -1,11 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Input, Button, Select, Checkbox, Typography, message } from 'antd';
-import { SearchOutlined, CloseOutlined, DownOutlined, UpOutlined } from '@ant-design/icons';
+import { Input, Button, Select, Checkbox, Typography, App } from 'antd';
+import { CloseOutlined, DownOutlined, UpOutlined } from '@ant-design/icons';
 import useAppStore from '../store/useAppStore';
-import { useTheme } from '../hooks/useTheme';
 
 const { Text } = Typography;
 const { Option } = Select;
+
+interface FileNode {
+  name: string;
+  path: string;
+  type: 'file' | 'directory';
+  children?: FileNode[];
+}
 
 interface SearchReplacePanelProps {
   visible: boolean;
@@ -30,6 +36,7 @@ const SearchReplacePanel: React.FC<SearchReplacePanelProps> = ({
   currentFilePath,
   isDarkMode = false
 }) => {
+  const { message } = App.useApp();
   const { fileTree, currentFile, updateFileContent } = useAppStore();
   
   // Search state
@@ -80,7 +87,7 @@ const SearchReplacePanel: React.FC<SearchReplacePanelProps> = ({
   const getFilesInScope = () => {
     const files: { path: string; name: string; content: string }[] = [];
     
-    const traverseTree = (nodes: any[]) => {
+    const traverseTree = (nodes: FileNode[]) => {
       nodes.forEach(node => {
         if (node.type === 'file') {
           const shouldInclude = (() => {
@@ -350,25 +357,28 @@ h1 {
     
     switch (searchMode) {
       case 'regex':
-      case 'regex-function':
+      case 'regex-function': {
         const regexPattern = new RegExp(searchText, flags);
         newLine = targetLine.replace(regexPattern, replaceText);
         break;
-      case 'fuzzy':
+      }
+      case 'fuzzy': {
         const currentResult = searchResults[currentResultIndex];
         newLine = targetLine.replace(currentResult.match, replaceText);
         break;
+      }
       case 'normal':
-      default:
+      default: {
         const escapedText = searchText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const normalPattern = new RegExp(escapedText, flags);
         newLine = targetLine.replace(normalPattern, replaceText);
         break;
+      }
     }
     
     lines[currentResult.line - 1] = newLine;
     const newContent = lines.join('\n');
-    updateFileContent(newContent);
+    updateFileContent(currentFile.path, newContent);
     
     setTimeout(performSearch, 100);
     message.success('Replaced 1 occurrence');
@@ -388,24 +398,27 @@ h1 {
     
     switch (searchMode) {
       case 'regex':
-      case 'regex-function':
+      case 'regex-function': {
         const regexPattern = new RegExp(searchText, flags);
         newContent = newContent.replace(regexPattern, replaceText);
         break;
-      case 'fuzzy':
+      }
+      case 'fuzzy': {
         currentFileResults.forEach(result => {
           newContent = newContent.replace(result.match, replaceText);
         });
         break;
+      }
       case 'normal':
-      default:
+      default: {
         const escapedText = searchText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const normalPattern = new RegExp(escapedText, flags);
         newContent = newContent.replace(normalPattern, replaceText);
         break;
+      }
     }
     
-    updateFileContent(newContent);
+    updateFileContent(currentFile.path, newContent);
     setTimeout(performSearch, 100);
     message.success(`Replaced ${currentFileResults.length} occurrences`);
   };

@@ -90,3 +90,13 @@ export interface EpubFile {
   content?: string | ArrayBuffer;
   encoding?: string;
 }
+
+export interface EpubUploadResponse {
+  success: boolean;
+  file_id: string;
+  session_id: string;
+  metadata: EpubMetadata;
+  file_tree: EpubFile[];
+  validation_result?: EpubValidationResult;
+  message?: string;
+}

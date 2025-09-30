@@ -1,10 +1,10 @@
-"""自定义异常类"""
+"""自定义异常模块"""
 
 from typing import Optional, Dict, Any
 
 
-class BaseAppException(Exception):
-    """应用基础异常类"""
+class AetherFolioException(Exception):
+    """AetherFolio 基础异常类"""
     
     def __init__(self, message: str, error_code: Optional[str] = None, details: Optional[Dict[str, Any]] = None):
         self.message = message
@@ -15,127 +15,180 @@ class BaseAppException(Exception):
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典格式"""
         return {
+            "error": self.__class__.__name__,
             "message": self.message,
             "error_code": self.error_code,
             "details": self.details
         }
 
 
-class ConfigurationError(BaseAppException):
-    """配置错误"""
-    pass
+class FileValidationError(AetherFolioException):
+    """文件验证异常"""
+    
+    def __init__(self, message: str, filename: Optional[str] = None, validation_errors: Optional[list] = None):
+        details = {}
+        if filename:
+            details["filename"] = filename
+        if validation_errors:
+            details["validation_errors"] = validation_errors
+        
+        super().__init__(message, "FILE_VALIDATION_ERROR", details)
 
 
-class SecurityError(BaseAppException):
-    """安全相关错误"""
-    pass
+class FileProcessingError(AetherFolioException):
+    """文件处理异常"""
+    
+    def __init__(self, message: str, filename: Optional[str] = None, operation: Optional[str] = None):
+        details = {}
+        if filename:
+            details["filename"] = filename
+        if operation:
+            details["operation"] = operation
+        
+        super().__init__(message, "FILE_PROCESSING_ERROR", details)
 
 
-class FileValidationError(BaseAppException):
-    """文件验证错误"""
-    pass
+class SessionError(AetherFolioException):
+    """会话异常"""
+    
+    def __init__(self, message: str, session_id: Optional[str] = None):
+        details = {}
+        if session_id:
+            details["session_id"] = session_id
+        
+        super().__init__(message, "SESSION_ERROR", details)
 
 
-class ContentValidationError(BaseAppException):
-    """内容验证错误"""
-    pass
+class AuthenticationError(AetherFolioException):
+    """认证异常"""
+    
+    def __init__(self, message: str, username: Optional[str] = None):
+        details = {}
+        if username:
+            details["username"] = username
+        
+        super().__init__(message, "AUTHENTICATION_ERROR", details)
 
 
-class RateLimitError(BaseAppException):
-    """速率限制错误"""
-    pass
+class AuthorizationError(AetherFolioException):
+    """授权异常"""
+    
+    def __init__(self, message: str, user_id: Optional[str] = None, required_permission: Optional[str] = None):
+        details = {}
+        if user_id:
+            details["user_id"] = user_id
+        if required_permission:
+            details["required_permission"] = required_permission
+        
+        super().__init__(message, "AUTHORIZATION_ERROR", details)
 
 
-class SessionError(BaseAppException):
-    """会话相关错误"""
-    pass
+class DatabaseError(AetherFolioException):
+    """数据库异常"""
+    
+    def __init__(self, message: str, operation: Optional[str] = None, table: Optional[str] = None):
+        details = {}
+        if operation:
+            details["operation"] = operation
+        if table:
+            details["table"] = table
+        
+        super().__init__(message, "DATABASE_ERROR", details)
 
 
-class EpubError(BaseAppException):
-    """EPUB处理错误"""
-    pass
+class ConfigurationError(AetherFolioException):
+    """配置异常"""
+    
+    def __init__(self, message: str, config_key: Optional[str] = None):
+        details = {}
+        if config_key:
+            details["config_key"] = config_key
+        
+        super().__init__(message, "CONFIGURATION_ERROR", details)
 
 
-class RateLimitError(BaseAppException):
-    """速率限制错误"""
-    pass
+class ValidationError(AetherFolioException):
+    """验证异常"""
+    
+    def __init__(self, message: str, field: Optional[str] = None, value: Optional[Any] = None):
+        details = {}
+        if field:
+            details["field"] = field
+        if value is not None:
+            details["value"] = str(value)
+        
+        super().__init__(message, "VALIDATION_ERROR", details)
 
 
-class ReplaceError(BaseAppException):
-    """替换操作错误"""
-    pass
+class BusinessLogicError(AetherFolioException):
+    """业务逻辑异常"""
+    
+    def __init__(self, message: str, operation: Optional[str] = None):
+        details = {}
+        if operation:
+            details["operation"] = operation
+        
+        super().__init__(message, "BUSINESS_LOGIC_ERROR", details)
 
 
-class FileOperationError(BaseAppException):
-    """文件操作错误"""
-    pass
+class ExternalServiceError(AetherFolioException):
+    """外部服务异常"""
+    
+    def __init__(self, message: str, service: Optional[str] = None, status_code: Optional[int] = None):
+        details = {}
+        if service:
+            details["service"] = service
+        if status_code:
+            details["status_code"] = status_code
+        
+        super().__init__(message, "EXTERNAL_SERVICE_ERROR", details)
 
 
-class ValidationError(BaseAppException):
-    """验证错误"""
-    pass
+class RateLimitError(AetherFolioException):
+    """速率限制异常"""
+    
+    def __init__(self, message: str, limit: Optional[int] = None, window: Optional[int] = None):
+        details = {}
+        if limit:
+            details["limit"] = limit
+        if window:
+            details["window"] = window
+        
+        super().__init__(message, "RATE_LIMIT_ERROR", details)
 
 
-class ProcessingError(BaseAppException):
-    """处理错误"""
-    pass
+class ResourceNotFoundError(AetherFolioException):
+    """资源未找到异常"""
+    
+    def __init__(self, message: str, resource_type: Optional[str] = None, resource_id: Optional[str] = None):
+        details = {}
+        if resource_type:
+            details["resource_type"] = resource_type
+        if resource_id:
+            details["resource_id"] = resource_id
+        
+        super().__init__(message, "RESOURCE_NOT_FOUND_ERROR", details)
 
 
-class ExportError(BaseAppException):
-    """导出错误"""
-    pass
+class ConcurrencyError(AetherFolioException):
+    """并发异常"""
+    
+    def __init__(self, message: str, resource: Optional[str] = None):
+        details = {}
+        if resource:
+            details["resource"] = resource
+        
+        super().__init__(message, "CONCURRENCY_ERROR", details)
 
 
-class ImportError(BaseAppException):
-    """导入错误"""
-    pass
-
-
-class DatabaseError(BaseAppException):
-    """数据库错误"""
-    pass
-
-
-class CacheError(BaseAppException):
-    """缓存错误"""
-    pass
-
-
-class NetworkError(BaseAppException):
-    """网络错误"""
-    pass
-
-
-class TimeoutError(BaseAppException):
-    """超时错误"""
-    pass
-
-
-class PermissionError(BaseAppException):
-    """权限错误"""
-    pass
-
-
-class ResourceNotFoundError(BaseAppException):
-    """资源未找到错误"""
-    pass
-
-
-class ResourceExistsError(BaseAppException):
-    """资源已存在错误"""
-    pass
-
-
-class QuotaExceededError(BaseAppException):
-    """配额超出错误"""
-    pass
-
-
-class ServiceUnavailableError(BaseAppException):
-    """服务不可用错误"""
-    pass
-
-
-class MaintenanceError(BaseAppException):
-    """维护模式错误"""
-    pass
+class SecurityError(AetherFolioException):
+    """安全异常"""
+    
+    def __init__(self, message: str, violation_type: Optional[str] = None, ip_address: Optional[str] = None):
+        details = {}
+        if violation_type:
+            details["violation_type"] = violation_type
+        if ip_address:
+            details["ip_address"] = ip_address
+        
+        super().__init__(message, "SECURITY_ERROR", details)

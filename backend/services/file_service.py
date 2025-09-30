@@ -6,7 +6,9 @@ import shutil
 import asyncio
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-from backend.services.base import BaseService
+from datetime import datetime
+from fastapi import HTTPException
+from services.base import BaseService
 
 
 class FileService(BaseService):
@@ -307,7 +309,8 @@ class FileService(BaseService):
         try:
             # 检查路径遍历攻击
             if ".." in file_path or "~" in file_path:
-                self.log_error(f"Dangerous path detected: {file_path}")
+                error = ValueError(f"Dangerous path detected: {file_path}")
+                self.log_error(f"Dangerous path detected: {file_path}", error)
                 return False
             
             # 检查绝对路径到系统敏感目录
@@ -319,7 +322,8 @@ class FileService(BaseService):
             normalized_path = os.path.normpath(file_path).lower()
             for sensitive in sensitive_paths:
                 if normalized_path.startswith(sensitive.lower()):
-                    self.log_error(f"Access to sensitive path denied: {file_path}")
+                    error = PermissionError(f"Access to sensitive path denied: {file_path}")
+                    self.log_error(f"Access to sensitive path denied: {file_path}", error)
                     return False
             
             self.log_info(f"Path validation passed: {file_path}")
@@ -377,7 +381,7 @@ class FileService(BaseService):
         """
         async with self.performance_context("get_file_content_enhanced"):
             try:
-                from backend.models.schemas import FileContent
+                from db.models.schemas import FileContent
                 import mimetypes
                 import chardet
                 
@@ -537,26 +541,71 @@ class FileService(BaseService):
                 if not file_path_obj.is_file():
                     raise ValueError(f"Path is not a file: {file_path}")
                 
+                # 检查文件大小，对于大文件使用流式读取
+                file_size = file_path_obj.stat().st_size
+                max_memory_size = 50 * 1024 * 1024  # 50MB内存限制
+                
                 # 检测文件编码
                 detected_encoding = await self.detect_file_encoding(file_path)
                 
-                # 尝试使用检测到的编码读取文件
-                try:
-                    content = file_path_obj.read_text(encoding=detected_encoding)
-                    self.log_info(f"File read with encoding: {file_path}", encoding=detected_encoding)
-                    return content, detected_encoding
-                except UnicodeDecodeError:
-                    # 如果检测到的编码失败，尝试其他编码
-                    encodings = ['utf-8', 'gbk', 'gb2312', 'latin1']
-                    for encoding in encodings:
-                        try:
-                            content = file_path_obj.read_text(encoding=encoding)
-                            self.log_info(f"File read with fallback encoding: {file_path}", encoding=encoding)
-                            return content, encoding
-                        except UnicodeDecodeError:
-                            continue
+                # 对于大文件，使用流式读取避免内存溢出
+                if file_size > max_memory_size:
+                    self.log_info(f"Large file detected ({file_size / 1024 / 1024:.1f}MB), using streaming read: {file_path}")
                     
-                    raise ValueError(f"Cannot decode file with supported encodings: {file_path}")
+                    # 流式读取大文件
+                    content_chunks = []
+                    chunk_size = 8192  # 8KB chunks
+                    
+                    try:
+                        with open(file_path, 'r', encoding=detected_encoding, errors='replace') as f:
+                            while True:
+                                chunk = f.read(chunk_size)
+                                if not chunk:
+                                    break
+                                content_chunks.append(chunk)
+                        
+                        content = ''.join(content_chunks)
+                        self.log_info(f"Large file read with streaming: {file_path}", encoding=detected_encoding, size_mb=file_size / 1024 / 1024)
+                        return content, detected_encoding
+                        
+                    except UnicodeDecodeError:
+                        # 如果检测到的编码失败，尝试其他编码
+                        encodings = ['utf-8', 'gbk', 'gb2312', 'latin1']
+                        for encoding in encodings:
+                            try:
+                                content_chunks = []
+                                with open(file_path, 'r', encoding=encoding, errors='replace') as f:
+                                    while True:
+                                        chunk = f.read(chunk_size)
+                                        if not chunk:
+                                            break
+                                        content_chunks.append(chunk)
+                                
+                                content = ''.join(content_chunks)
+                                self.log_info(f"Large file read with fallback encoding: {file_path}", encoding=encoding)
+                                return content, encoding
+                            except UnicodeDecodeError:
+                                continue
+                        
+                        raise ValueError(f"Cannot decode large file with supported encodings: {file_path}")
+                else:
+                    # 小文件使用原有的一次性读取方式
+                    try:
+                        content = file_path_obj.read_text(encoding=detected_encoding)
+                        self.log_info(f"File read with encoding: {file_path}", encoding=detected_encoding)
+                        return content, detected_encoding
+                    except UnicodeDecodeError:
+                        # 如果检测到的编码失败，尝试其他编码
+                        encodings = ['utf-8', 'gbk', 'gb2312', 'latin1']
+                        for encoding in encodings:
+                            try:
+                                content = file_path_obj.read_text(encoding=encoding)
+                                self.log_info(f"File read with fallback encoding: {file_path}", encoding=encoding)
+                                return content, encoding
+                            except UnicodeDecodeError:
+                                continue
+                        
+                        raise ValueError(f"Cannot decode file with supported encodings: {file_path}")
                 
             except Exception as e:
                 self.log_error(f"Failed to read file with encoding: {file_path}", e)
@@ -697,6 +746,380 @@ class FileService(BaseService):
         """清理服务资源"""
         # FileService 没有需要特别清理的资源
         await super()._cleanup()
+    
+    async def get_file_tree(self, session_id: str):
+        """获取文件树结构
+        
+        Args:
+            session_id: 会话ID
+            
+        Returns:
+            FileTreeResponse: 文件树响应
+        """
+        async with self.performance_context("get_file_tree", session_id=session_id):
+            try:
+                from db.models.schemas import FileTreeResponse, FileNode, FileType
+                from services.session_service import session_service
+                from services.epub_service import epub_service
+                from core.config import settings
+                
+                # 获取会话信息
+                session = await session_service.get_session(session_id)
+                self.log_info(f"Session lookup result for {session_id}: {session is not None}")
+                if not session:
+                    error = FileNotFoundError(f"Session not found: {session_id}")
+                    self.log_error(f"Session not found: {session_id}", error)
+                    raise HTTPException(
+                        status_code=404,
+                        detail={
+                            "status": "error",
+                            "error_code": "SESSION_NOT_FOUND",
+                            "message": "会话不存在或已过期"
+                        }
+                    )
+                
+                # 根据文件类型获取文件树
+                file_type = session['session_metadata'].get("file_type") if session.get('session_metadata') else None
+                
+                # 如果metadata中没有file_type，根据文件扩展名判断
+                if not file_type and session.get('original_filename'):
+                    file_ext = Path(session['original_filename']).suffix.lower()
+                    if file_ext == '.epub':
+                        file_type = 'epub'
+                    elif file_ext in ['.txt', '.md']:
+                        file_type = 'text'
+                    else:
+                        file_type = 'text'  # 默认为text类型
+                
+                if file_type == "text":
+                    # 处理TEXT文件 - 从内存中获取文件信息
+                    from services.text_service import text_service
+                    
+                    # 检查text_service中是否有该会话的文件内容
+                    if not hasattr(text_service, 'file_contents') or session_id not in text_service.file_contents:
+                        raise HTTPException(
+                            status_code=404,
+                            detail={
+                                "status": "error",
+                                "error_code": "FILE_NOT_FOUND",
+                                "message": "会话文件内容不存在"
+                            }
+                        )
+                    
+                    # 从内存中构建TEXT文件的文件树
+                    file_tree = []
+                    file_contents = text_service.file_contents[session_id]
+                    
+                    for filename, content_bytes in file_contents.items():
+                        file_size = len(content_bytes)
+                        file_ext = Path(filename).suffix.lower()
+                        
+                        file_node = FileNode(
+                            name=filename,
+                            path=filename,  # 相对路径
+                            type=FileType.TEXT if file_ext in ['.txt', '.md'] else FileType.FILE,
+                            size=file_size,
+                            mime_type="text/plain" if file_ext in ['.txt', '.md'] else None,
+                            modified_time=datetime.now()  # 使用当前时间作为修改时间
+                        )
+                        file_tree.append(file_node)
+                    
+                    self.log_info(f"Text file tree retrieved from memory", session_id=session_id, file_count=len(file_tree))
+                    
+                else:
+                    # 处理EPUB文件，调用epub_service
+                    file_tree = await epub_service.get_file_tree(session_id)
+                    self.log_info(f"EPUB file tree retrieved", session_id=session_id)
+                
+                # 计算统计信息
+                total_files = len(file_tree)
+                total_size = sum(node.size for node in file_tree if node.size)
+                
+                return FileTreeResponse(
+                    success=True,
+                    file_tree=file_tree,
+                    total_files=total_files,
+                    total_size=total_size
+                )
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                self.log_error(f"Failed to get file tree", e, session_id=session_id)
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "status": "error",
+                        "error_code": "INTERNAL_ERROR",
+                        "message": "获取文件树失败"
+                    }
+                )
+
+
+    async def get_file_content(self, session_id: str, file_path: str) -> 'FileContent':
+        """根据会话ID和文件路径获取文件内容
+        
+        Args:
+            session_id: 会话ID
+            file_path: 文件路径
+            
+        Returns:
+            FileContent: 文件内容对象
+        """
+        async with self.performance_context("get_file_content", session_id=session_id, file_path=file_path):
+            try:
+                from db.models.schemas import FileContent
+                from services.session_service import session_service
+                from core.security import security_validator
+                import mimetypes
+                import os
+                
+                # 获取会话信息
+                session = await session_service.get_session(session_id)
+                if not session:
+                    raise FileNotFoundError(f"Session not found: {session_id}")
+                
+                # 获取会话的文件根目录
+                base_dir = None
+                
+                # 对于EPUB文件，使用extracted_path + epub子目录
+                if session.get('extracted_path') and os.path.exists(session['extracted_path']):
+                    epub_dir = os.path.join(session['extracted_path'], 'epub')
+                    if os.path.exists(epub_dir):
+                        base_dir = epub_dir
+                        self.log_info(f"Using EPUB extracted path: {base_dir}", session_id=session_id)
+                    else:
+                        base_dir = session['extracted_path']
+                        self.log_info(f"Using EPUB extracted path (no epub subdir): {base_dir}", session_id=session_id)
+                
+                # 获取文件类型
+                file_type = session['session_metadata'].get("file_type") if session.get('session_metadata') else None
+                
+                # 如果metadata中没有file_type，根据文件扩展名判断
+                if not file_type and session.get('original_filename'):
+                    file_ext = Path(session['original_filename']).suffix.lower()
+                    if file_ext == '.epub':
+                        file_type = 'epub'
+                    elif file_ext in ['.txt', '.md']:
+                        file_type = 'text'
+                    else:
+                        file_type = 'text'  # 默认为text类型
+                
+                # 对于TEXT文件，从内存中获取文件内容
+                if file_type == "text":
+                    from services.text_service import text_service
+                    
+                    # 检查text_service中是否有该会话的文件内容
+                    if not hasattr(text_service, 'file_contents') or session_id not in text_service.file_contents:
+                        raise FileNotFoundError(f"Session file contents not found in memory: {session_id}")
+                    
+                    file_contents = text_service.file_contents[session_id]
+                    if file_path not in file_contents:
+                        raise FileNotFoundError(f"File not found in session: {file_path}")
+                    
+                    # 从内存中获取文件内容
+                    content_bytes = file_contents[file_path]
+                    content = content_bytes.decode('utf-8')
+                    
+                    # 构建FileContent对象
+                    file_path_obj = Path(file_path)
+                    return FileContent(
+                        path=file_path,
+                        content=content,
+                        mime_type="text/plain" if file_path_obj.suffix.lower() in ['.txt'] else "text/markdown",
+                        size=len(content_bytes),
+                        encoding="utf-8",
+                        is_binary=False
+                    )
+                
+                # 对于EPUB文件，使用文件系统路径
+                if not base_dir:
+                    # 对于EPUB文件，尝试从epub_service获取文件内容
+                    if file_type == "epub":
+                        from services.epub_service import epub_service
+                        try:
+                            return await epub_service.get_file_content(session_id, file_path)
+                        except Exception as epub_error:
+                            self.log_error(f"Failed to get EPUB file content from epub_service", epub_error, session_id=session_id, file_path=file_path)
+                            raise FileNotFoundError(f"EPUB file not found: {file_path}")
+                    
+                    # 对于其他类型，检查是否有extracted_path
+                    error_msg = f"No base directory available for file type: {file_type}"
+                    self.log_error(error_msg, FileNotFoundError(error_msg), session_id=session_id, file_path=file_path)
+                    raise FileNotFoundError(f"No valid base directory found for session: {session_id}")
+                
+                if not base_dir:
+                    raise FileNotFoundError(f"No valid base directory found for session: {session_id}")
+                
+                # 安全路径验证和构建完整路径
+                safe_path = security_validator.sanitize_path(file_path, base_dir)
+                
+                if not os.path.exists(safe_path) or not os.path.isfile(safe_path):
+                    error_msg = f"File not found: {safe_path}"
+                    self.log_error(error_msg, FileNotFoundError(error_msg), session_id=session_id, file_path=file_path)
+                    raise FileNotFoundError(f"File not found: {file_path}")
+                
+                # 使用现有的get_file_content_enhanced方法
+                return await self.get_file_content_enhanced(safe_path)
+                
+            except Exception as e:
+                self.log_error(f"Failed to get file content: {file_path}", e, session_id=session_id)
+                raise
+
+
+    async def export_file(self, session_id: str, format: str = "original"):
+        """导出文件
+        
+        Args:
+            session_id: 会话ID
+            format: 导出格式 (original, epub, txt)
+            
+        Returns:
+            ExportResult: 包含content_stream、media_type和filename的导出结果
+        """
+        async with self.performance_context("export_file", session_id=session_id, format=format):
+            try:
+                from services.session_service import session_service
+                from services.epub_service import epub_service
+                from services.text_service import text_service
+                import tempfile
+                import os
+                from pathlib import Path
+                import io
+                
+                # 获取会话信息
+                session = await session_service.get_session(session_id)
+                if not session:
+                    raise FileNotFoundError(f"Session not found: {session_id}")
+                
+                self.log_info(f"Exporting file for session: {session_id}", format=format)
+                
+                # 根据格式和会话类型进行导出
+                session_file_type = session['session_metadata'].get("file_type") if session.get('session_metadata') else None
+                if format == "epub" or (format == "original" and session_file_type == "epub"):
+                    # 导出EPUB文件
+                    self.log_info(f"Starting EPUB export for session: {session_id}", session_id=session_id)
+                    
+                    # 验证会话状态 - 移除对extracted_path的强依赖
+                    if not session.get('session_metadata', {}).get('file_type') == 'epub':
+                        self.log_error(f"Session is not an EPUB session", session_id=session_id)
+                        raise FileNotFoundError(f"Session is not an EPUB session: {session_id}")
+                    
+                    # 创建临时输出文件
+                    temp_output_path = None
+                    try:
+                        with tempfile.NamedTemporaryFile(suffix=".epub", delete=False) as temp_file:
+                            temp_output_path = temp_file.name
+                        
+                        self.log_info(f"Created temporary file: {temp_output_path}", session_id=session_id)
+                        
+                        # 使用epub_service导出
+                        output_path = await epub_service.export_epub(session_id, temp_output_path)
+                        
+                        # 验证导出文件是否存在且有内容
+                        if not os.path.exists(output_path):
+                            raise FileNotFoundError(f"Export failed - output file not created: {output_path}")
+                        
+                        file_size = os.path.getsize(output_path)
+                        if file_size == 0:
+                            raise ValueError(f"Export failed - output file is empty: {output_path}")
+                        
+                        self.log_info(f"EPUB export successful, file size: {file_size} bytes", session_id=session_id)
+                        
+                        # 读取导出的文件内容
+                        with open(output_path, 'rb') as f:
+                            file_content = f.read()
+                        
+                        # 创建文件流
+                        content_stream = io.BytesIO(file_content)
+                        
+                        # 确定文件名
+                        original_filename = session.get('original_filename', 'export')
+                        if original_filename.endswith('.epub'):
+                            filename = original_filename
+                        else:
+                            filename = f"{Path(original_filename).stem}.epub"
+                        
+                        result = ExportResult(
+                            content_stream=content_stream,
+                            media_type="application/epub+zip",
+                            filename=filename
+                        )
+                        
+                        self.log_info(f"EPUB export completed successfully", 
+                                     session_id=session_id, 
+                                     export_filename=filename, 
+                                     size=len(file_content),
+                                     temp_file=temp_output_path)
+                        return result
+                        
+                    except Exception as e:
+                        self.log_error(f"EPUB export failed", e, session_id=session_id, temp_file=temp_output_path)
+                        raise
+                        
+                    finally:
+                        # 确保临时文件被清理
+                        if temp_output_path and os.path.exists(temp_output_path):
+                            try:
+                                os.unlink(temp_output_path)
+                                self.log_info(f"Cleaned up temporary file: {temp_output_path}", session_id=session_id)
+                            except Exception as cleanup_error:
+                                self.log_error(f"Failed to cleanup temporary file: {temp_output_path}", cleanup_error, session_id=session_id)
+                
+                elif format == "txt" or (format == "original" and session_file_type == "text"):
+                    # 导出文本文件
+                    session_dir = session_service.get_session_dir(session_id, "text")
+                    
+                    if not session_dir.exists():
+                        raise FileNotFoundError(f"Session directory not found: {session_dir}")
+                    
+                    # 查找文本文件
+                    text_files = list(session_dir.glob("*.txt")) + list(session_dir.glob("*.md"))
+                    if not text_files:
+                        raise FileNotFoundError(f"No text files found in session: {session_id}")
+                    
+                    # 使用第一个找到的文件
+                    text_file = text_files[0]
+                    
+                    # 读取文件内容
+                    with open(text_file, 'r', encoding='utf-8') as f:
+                        file_content = f.read()
+                    
+                    # 创建文件流
+                    content_stream = io.BytesIO(file_content.encode('utf-8'))
+                    
+                    # 确定文件名和MIME类型
+                    filename = session.get('original_filename') or text_file.name
+                    if text_file.suffix == '.md':
+                        media_type = "text/markdown"
+                    else:
+                        media_type = "text/plain"
+                    
+                    result = ExportResult(
+                        content_stream=content_stream,
+                        media_type=media_type,
+                        filename=filename
+                    )
+                    
+                    self.log_info(f"Text export completed", session_id=session_id, export_filename=filename, size=len(file_content))
+                    return result
+                
+                else:
+                    raise ValueError(f"Unsupported export format: {format}")
+                    
+            except Exception as e:
+                self.log_error(f"Failed to export file: {session_id}", e, format=format)
+                raise
+
+
+class ExportResult:
+    """导出结果类"""
+    
+    def __init__(self, content_stream, media_type: str, filename: str):
+        import io
+        self.content_stream = content_stream
+        self.media_type = media_type
+        self.filename = filename
 
 
 # 创建全局服务实例
@@ -704,4 +1127,4 @@ file_service = FileService()
 
 
 # 导出
-__all__ = ["FileService", "file_service"]
+__all__ = ["FileService", "file_service", "ExportResult"]

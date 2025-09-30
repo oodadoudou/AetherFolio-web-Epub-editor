@@ -5,7 +5,7 @@ import { useAppStore } from '../store';
 
 export interface WebSocketMessage {
   type: string;
-  payload?: any;
+  payload?: unknown;
   timestamp?: number;
 }
 
@@ -297,7 +297,7 @@ export function useWebSocket(options: WebSocketOptions = {}): UseWebSocketReturn
  */
 export function useWebSocketMessage(
   messageType: string,
-  handler: (payload: any) => void,
+  handler: (payload: unknown) => void,
   options: WebSocketOptions = {}
 ): UseWebSocketReturn {
   const webSocket = useWebSocket({

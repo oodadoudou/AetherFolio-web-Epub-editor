@@ -1,1 +1,1 @@
-# API endpoints package initialization
+"""API endpoints模块"""

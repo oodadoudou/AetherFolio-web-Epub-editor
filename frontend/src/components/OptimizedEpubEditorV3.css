@@ -1,0 +1,24 @@
+.optimized-epub-editor-v3 .editor-toolbar {
+  padding: 0 16px;
+  background: #fff;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.optimized-epub-editor-v3 .editor-container {
+  height: 100%;
+}
+
+.optimized-epub-editor-v3 .preview-container {
+  height: 100%;
+  background: #fff;
+  border: 1px solid #f0f0f0;
+  border-radius: 4px;
+  padding: 1rem;
+  overflow: auto;
+}
+
+.optimized-epub-editor-v3 .resize-handle {
+  background-color: #e8e8e8;
+  width: 5px;
+  cursor: col-resize;
+}
