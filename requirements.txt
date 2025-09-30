@@ -1,0 +1,38 @@
+# Vercel Serverless Dependencies for AetherFolio EPUB Editor
+
+# Core web framework (lightweight for serverless)
+flask==3.0.0
+
+# Data validation and serialization
+pydantic==2.5.3
+
+# Authentication and security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
+
+# Database drivers
+psycopg2-binary==2.9.9
+
+# EPUB processing
+ebooklib==0.18
+beautifulsoup4==4.12.2
+lxml==5.0.0
+
+# File handling and utilities
+chardet==5.2.0
+
+# Utilities
+python-dotenv==1.0.0
+
+# JSON Web Tokens
+PyJWT==2.8.0
+
+# HTTP requests
+requests==2.31.0
+
+# Date and time utilities
+python-dateutil==2.8.2
+
+# Environment variable management
+os-environ==1.4.0

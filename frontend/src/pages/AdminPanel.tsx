@@ -451,7 +451,7 @@ const AdminPanel: React.FC = () => {
                           }
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                          {invitation.usage_count} / {invitation.usage_limit || '无限制'}
+                          {invitation.used_count} / {invitation.usage_limit || '无限制'}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
