@@ -310,7 +310,8 @@ class EpubService(CacheableService[Dict]):
             return elem.text.strip()
         
         # 尝试Dublin Core命名空间
-        elem = metadata_elem.find(f".//{{{"http://purl.org/dc/elements/1.1/"}}}{tag_name}")
+        dc_namespace = "http://purl.org/dc/elements/1.1/"
+        elem = metadata_elem.find(f".//{{{dc_namespace}}}{tag_name}")
         if elem is not None and elem.text:
             return elem.text.strip()
         

@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     # 服务器配置
     host: str = Field(default="0.0.0.0", env="HOST")
     port: int = Field(default=8000, env="PORT")
-    allowed_origins: list = Field(default=["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000", "http://127.0.0.1:5173"], env="ALLOWED_ORIGINS")  # CORS允许的源
+    allowed_origins: list = Field(default=["http://localhost", "http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000", "http://127.0.0.1:5173"], env="CORS_ORIGINS")  # CORS允许的源
     
     # 数据库配置 - 确保路径指向backend/db/data
     database_url: str = Field(

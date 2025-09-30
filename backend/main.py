@@ -2,6 +2,7 @@
 
 import os
 import asyncio
+from datetime import datetime
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -316,11 +317,11 @@ async def health_check():
     """健康检查"""
     try:
         # 检查各个服务的状态
-        session_count = len(await session_service.list_sessions())
+        session_count = await session_service._get_active_sessions_count()
         
         return {
             "status": "healthy",
-            "timestamp": performance_logger.get_current_time(),
+            "timestamp": datetime.now().isoformat(),
             "version": "1.0.0",
             "services": {
                 "session_service": "healthy",
@@ -339,7 +340,7 @@ async def health_check():
             status_code=503,
             content={
                 "status": "unhealthy",
-                "timestamp": performance_logger.get_current_time(),
+                "timestamp": datetime.now().isoformat(),
                 "error": str(e)
             }
         )

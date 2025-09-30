@@ -47,12 +47,23 @@ const AdminPanel: React.FC = () => {
   const loadUsers = async (page: number = 1) => {
     try {
       setLoading(true);
+      console.log('开始加载用户列表, page:', page);
+      console.log('当前token:', authService.getAccessToken());
+      
       const response = await authService.getUsers(page, 20);
       
+      console.log('用户API响应:', response);
+      
       if (response.success && response.data) {
+        console.log('用户数据:', response.data);
         setUsers(response.data);
+        setError(null); // 清除错误
+      } else {
+        console.error('用户加载失败:', response.error);
+        setError(response.error || '加载用户列表失败');
       }
     } catch (err) {
+      console.error('用户加载异常:', err);
       setError(err instanceof Error ? err.message : '加载用户列表失败');
     } finally {
       setLoading(false);
@@ -63,6 +74,9 @@ const AdminPanel: React.FC = () => {
   const loadInvitations = async (page: number = 1) => {
     try {
       setLoading(true);
+      console.log('开始加载邀请码列表, page:', page);
+      console.log('当前token:', authService.getAccessToken());
+      
       const response = await authService.getInvitationCodes(page, 20);
       
       console.log('邀请码API响应:', response);
@@ -70,6 +84,7 @@ const AdminPanel: React.FC = () => {
       if (response.success && response.data) {
         console.log('邀请码数据:', response.data);
         setInvitations(response.data);
+        setError(null); // 清除错误
       } else {
         console.error('邀请码加载失败:', response.error);
         setError(response.error || '加载邀请码列表失败');
@@ -104,8 +119,6 @@ const AdminPanel: React.FC = () => {
 
   // 删除邀请码
   const handleDeleteInvitation = async (codeId: number) => {
-    if (!confirm('确定要删除这个邀请码吗？')) return;
-    
     try {
       setLoading(true);
       const response = await authService.deleteInvitationCode(codeId);
@@ -134,17 +147,6 @@ const AdminPanel: React.FC = () => {
 
   // 删除用户
   const handleDeleteUser = async (userId: number, username: string) => {
-    // 使用更友好的确认对话框
-    const confirmed = window.confirm(
-      `确定要删除用户 "${username}" 吗？\n\n` +
-      `此操作将：\n` +
-      `• 永久删除该用户账户\n` +
-      `• 删除该用户的所有数据\n` +
-      `• 此操作不可撤销\n\n` +
-      `请确认是否继续？`
-    );
-    
-    if (!confirmed) return;
     
     try {
       setLoading(true);
@@ -208,9 +210,52 @@ const AdminPanel: React.FC = () => {
 
   // 加载数据
   useEffect(() => {
-    loadUsers(userPage);
-    loadInvitations(invitationPage);
-  }, [userPage, invitationPage]);
+    console.log('AdminPanel useEffect triggered');
+    console.log('User state:', user);
+    console.log('User is_admin:', user?.is_admin);
+    console.log('Current token:', localStorage.getItem('access_token'));
+    console.log('Auth service token:', authService.getAccessToken());
+    
+    // 检查是否有token
+    const token = authService.getAccessToken();
+    if (!token) {
+      console.log('No token found, user needs to login');
+      setError('请先登录');
+      return;
+    }
+    
+    // 如果用户信息还在加载中，等待加载完成
+    // 注意：ProtectedRoute已经处理了认证检查，这里用户应该已经加载完成
+    if (user === null) {
+      console.log('User not loaded yet, waiting...');
+      return;
+    }
+    
+    // 检查用户是否为管理员
+    if (user && !user.is_admin) {
+      console.log('User is not admin:', user);
+      setError('您没有管理员权限');
+      return;
+    }
+    
+    // 用户是管理员，加载数据
+    if (user?.is_admin) {
+      console.log('Loading data for admin user:', user.username);
+      setError(null); // 清除之前的错误
+      loadUsers(userPage);
+      loadInvitations(invitationPage);
+    }
+  }, [userPage, invitationPage, user]);
+
+  // 添加一个单独的useEffect来处理初始数据加载
+  useEffect(() => {
+    // 当组件挂载时，如果用户已经是管理员，立即加载数据
+    if (user?.is_admin) {
+      console.log('Initial data load for admin user');
+      loadUsers(1);
+      loadInvitations(1);
+    }
+  }, [user?.is_admin]); // 只依赖于is_admin状态
 
   // 检查管理员权限
   if (!user?.is_admin) {
@@ -406,7 +451,7 @@ const AdminPanel: React.FC = () => {
                           }
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                          {invitation.used_count} / {invitation.usage_limit || '无限制'}
+                          {invitation.usage_count} / {invitation.usage_limit || '无限制'}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${

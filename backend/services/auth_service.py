@@ -254,6 +254,38 @@ class AuthService:
         
         return users, total
     
+    def get_users_paginated(self, page: int = 1, page_size: int = 20) -> tuple[List[User], int]:
+        """获取用户列表（分页）"""
+        return self.get_users(page, page_size)
+    
+    def get_invitation_codes_paginated(self, page: int = 1, page_size: int = 20) -> tuple[List[InvitationCode], int]:
+        """获取邀请码列表（分页）"""
+        return self.get_invitation_codes(page, page_size)
+    
+    def create_invitation_code(self, code: str, usage_limit: int = 1, 
+                             expires_at: Optional[datetime] = None, 
+                             description: str = "") -> InvitationCode:
+        """创建邀请码"""
+        # 确保过期时间
+        if expires_at is None:
+            expires_at = datetime.utcnow() + timedelta(days=30)
+        
+        invitation = InvitationCode(
+            code=code,
+            created_by=1,  # 默认管理员ID
+            expires_at=expires_at,
+            usage_limit=usage_limit,
+            usage_count=0,
+            description=description,
+            is_active=True
+        )
+        
+        self.db.add(invitation)
+        self.db.commit()
+        self.db.refresh(invitation)
+        
+        return invitation
+    
     def update_user(self, user_id: int, is_active: Optional[bool] = None, 
                    role: Optional[str] = None, updated_by: int = None) -> Optional[User]:
         """更新用户信息"""
@@ -372,3 +404,22 @@ class AuthService:
         self.db.commit()
         
         return admin_user
+    
+    def delete_user(self, user_id: int, deleted_by: int = None) -> bool:
+        """删除用户"""
+        user = self.get_user_by_id(user_id)
+        if not user:
+            return False
+        
+        # 记录审计日志
+        if deleted_by:
+            self.log_audit(deleted_by, "user_deleted", "user", str(user_id),
+                          {"username": user.username, "role": user.role})
+        
+        # 使用户所有会话失效
+        self.invalidate_user_sessions(user_id)
+        
+        # 删除用户
+        self.db.delete(user)
+        self.db.commit()
+        return True

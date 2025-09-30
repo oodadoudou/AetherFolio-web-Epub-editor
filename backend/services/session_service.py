@@ -22,9 +22,10 @@ class SessionService(BaseService):
     def __init__(self):
         super().__init__("session")
         self._lock = Lock()  # 线程安全锁
-        # 使用项目根目录下的data/session
-        project_root = Path(__file__).parent.parent.parent
-        self.session_base_dir = project_root / "data" / "session"
+        # 使用容器内的data目录
+        # 在Docker环境中，数据目录挂载在/app/data
+        app_root = Path(__file__).parent.parent  # /app
+        self.session_base_dir = app_root / "data" / "session"
         
         # 确保session目录存在
         self.session_base_dir.mkdir(parents=True, exist_ok=True)
