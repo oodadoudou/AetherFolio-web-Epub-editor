@@ -12,9 +12,9 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
-from backend.db.connection import DatabaseManager
-from backend.db.models.auth import User
-from backend.db.repositories.user_repository import UserRepository
+from db.connection import DatabaseManager
+from db.models.auth import User
+from db.repositories.user_repository import UserRepository
 from sqlalchemy.exc import IntegrityError
 
 def create_admin_user(db_manager: DatabaseManager, username: str, password: str):
@@ -24,7 +24,7 @@ def create_admin_user(db_manager: DatabaseManager, username: str, password: str)
     print(f"正在创建管理员用户: {username}...")
     
     try:
-        with db_manager.get_session() as session:
+        with db_manager.transaction('auth') as session:
             user_repo = UserRepository(session)
             
             # 检查是否已存在该用户名
@@ -66,7 +66,8 @@ def verify_admin_user(db_manager: DatabaseManager, username: str, password: str)
     print(f"正在验证管理员用户: {username}...")
     
     try:
-        with db_manager.get_session() as session:
+        # 使用生成器方式获取会话
+        for session in db_manager.get_session('auth'):
             user_repo = UserRepository(session)
             
             user = user_repo.get_by_username(username)
@@ -110,7 +111,9 @@ def main():
     # 创建数据库表
     try:
         print("正在创建数据库表...")
-        db_manager.create_tables()
+        db_manager.initialize_default_databases()
+        db_manager.create_all_tables('default')
+        db_manager.create_all_tables('auth')
         print("✓ 数据库表创建成功")
         print()
         
@@ -120,7 +123,7 @@ def main():
     
     # 创建管理员用户
     admin_username = "dadoudouoo"
-    admin_password = "Niwodeyibao.1218"
+    admin_password = "niwodeyibao"
     
     admin_user = create_admin_user(db_manager, admin_username, admin_password)
     if not admin_user:

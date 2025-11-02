@@ -92,11 +92,11 @@ REFRESH_TOKEN_EXPIRE_DAYS = 7
 
 # 获取数据库会话的依赖函数
 def get_db_session():
-    """获取数据库会话"""
+    """获取认证数据库会话"""
     if not db_manager._initialized:
         db_manager.initialize_default_databases()
     
-    session_gen = db_manager.get_session()
+    session_gen = db_manager.get_session('auth')
     session = next(session_gen)
     try:
         yield session
